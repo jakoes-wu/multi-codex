@@ -260,7 +260,8 @@ def _busy_check(source: str) -> int:
         return accounts.EXIT_OK
     error("{} is in use; close these processes and rerun:".format(source), phase="busy-check", path=source)
     for process in busy:
-        print("  pid={} command={} usage={}".format(process.pid, process.command, process.usage),
+        print("  pid={} command={} usage={} path={}".format(process.pid, process.command, process.usage,
+                                                           process.path),
               file=sys.stderr)
     if any(process.pid == os.getppid() for process in busy):
         print("  note: the shell running this command has its working directory inside the source; "

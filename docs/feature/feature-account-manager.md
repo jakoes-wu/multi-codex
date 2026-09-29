@@ -268,7 +268,10 @@ URL 校验规则：
   - 本工具自身和 lsof 的 PID 要排除。
   - 如果调用本工具的 shell 的工作目录就在 R 下，报错时要单独提示“当前 shell 的工作目录在源目录中，请先 cd 出去”。
 - Linux 上没有 `lsof` 时，改为遍历 `/proc/*/cwd`、`/proc/*/exe`、`/proc/*/fd/*`。
-- 判定为占用时返回 4，列出 PID 和进程名；进程名含 codex 的排在前面。
+- 判定为占用时返回 4，每个进程输出一行 `pid=… command=… usage=… path=…`：
+  - `usage` 取 `cwd`（工作目录）、`executable`（可执行文件）、`mapped`（内存映射）、`fd N`（打开的文件）之一；
+  - `path` 是落在源目录下的那个路径；
+  - 进程名含 codex 的排在前面。
 - `lsof` 没有正常输出时，视为“检查失败”：拒绝迁移，并提示可以用 `--skip-process-check` 跳过。“没有正常输出”指：退出码非 0，并且 stdout 里一个进程记录都没有。
   - Linux 普通用户运行 lsof 时，常会在 stderr 输出无权限读取的告警，同时退出码非 0，所以不能只凭 stderr 判定失败。这条规则需要在Linux 测试机上实测，见 §10。
 - 什么时候检查：
