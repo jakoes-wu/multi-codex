@@ -108,7 +108,7 @@ trap 'exit 143' TERM
 # otherwise a clone in the current directory would be installed by mistake.
 SCRIPT_DIR=""
 case "$0" in
-  *install.sh) SCRIPT_DIR="$(cd "$(dirname "$0")" 2>/dev/null && pwd || true)" ;;
+  *install.sh) SCRIPT_DIR="$(cd "$(dirname "$0")" 2>/dev/null && pwd)" || SCRIPT_DIR="" ;;
 esac
 if [ -n "$SCRIPT_DIR" ] && [ -f "${SCRIPT_DIR}/src/multi_codex/__init__.py" ] && [ -z "${MULTI_CODEX_TARBALL:-}" ]; then
   SRC_PKG="${SCRIPT_DIR}/src/multi_codex"
