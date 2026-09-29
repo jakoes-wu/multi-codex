@@ -6,23 +6,23 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
-### Changed
+## [0.1.0] - 2026-09-29
 
-- The busy-process report of `migrate-default` now says how each process uses
-  the source (`cwd`, `executable`, `mapped` or `fd N`) and which path it holds.
-
-### Changed
-
-- Setting a SOCKS proxy now prints a warning: Codex sends most requests as HTTP
-  CONNECT even with a SOCKS URL, so only ports that also accept HTTP work.
+First release (macOS and Linux).
 
 ### Added
 
 - `migrate-default`: turn the default `~/.codex` into a named account, with a
-  resumable journal, busy-process check, rename or copy-and-verify modes and a
-  compatibility link.
+  resumable journal, rename or copy-and-verify modes and a compatibility link.
+  The busy-process check reports how each process uses the source (`cwd`,
+  `executable`, `mapped` or `fd N`) and which path it holds.
 - `init`, `add`, `proxy`, `remove`, `apply`, `list` commands; every write
   command is idempotent and supports `--dry-run`.
-- Per-account proxy settings (`inherit`, `off`, port or URL).
+- Per-account proxy settings (`inherit`, `off`, port or URL). Setting a SOCKS
+  proxy prints a warning: Codex sends most requests as HTTP CONNECT even with a
+  SOCKS URL, so only ports that also accept HTTP work.
 - Optional shared resources linked from one directory into selected accounts.
 - `install.sh` with `--config`, `--prefix` and `--uninstall`.
+
+[Unreleased]: https://github.com/jakoes-wu/multi-codex/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/jakoes-wu/multi-codex/releases/tag/v0.1.0
