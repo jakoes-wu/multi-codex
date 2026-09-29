@@ -1,0 +1,18 @@
+# Changelog
+
+All notable changes to this project are documented here. The format follows
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
+[Semantic Versioning](https://semver.org/).
+
+## [Unreleased]
+
+### Added
+
+- `migrate-default`: turn the default `~/.codex` into a named account, with a
+  resumable journal, busy-process check, rename or copy-and-verify modes and a
+  compatibility link.
+- `init`, `add`, `proxy`, `remove`, `apply`, `list` commands; every write
+  command is idempotent and supports `--dry-run`.
+- Per-account proxy settings (`inherit`, `off`, port or URL).
+- Optional shared resources linked from one directory into selected accounts.
+- `install.sh` with `--config`, `--prefix` and `--uninstall`.

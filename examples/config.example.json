@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "root": "~/.cx",
+  "bin_dir": "~/.local/bin",
+  "shared": {
+    "dir": "~/.codex-shared",
+    "items": ["AGENTS.md", "skills", "rules", "agents"]
+  },
+  "accounts": {
+    "work": {"proxy": "http://127.0.0.1:7901", "shared": true},
+    "personal": {"proxy": "inherit", "shared": false},
+    "offline-proxy-test": {"proxy": "off"}
+  }
+}
