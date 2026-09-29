@@ -284,13 +284,15 @@ class InterruptionTest(MigrateBase):
 
 
 class BusyCheckTest(MigrateBase):
-    def _assert_busy(self, holder):
+    def _assert_busy(self, holder, usage_and_path):
         try:
             time.sleep(0.3)
             before = self.snapshot()
             result = self.migrate()
             self.assertEqual(result.code, 4, result)
-            self.assertIn("pid={}".format(holder.pid), result.err)
+            line = [row for row in result.err.splitlines() if "pid={}".format(holder.pid) in row]
+            self.assertEqual(len(line), 1, result)
+            self.assertIn(usage_and_path, line[0])
             self.assertEqual(before, self.snapshot())
         finally:
             holder.kill()
@@ -298,10 +300,11 @@ class BusyCheckTest(MigrateBase):
 
     def test_open_file(self):
         code = "import time; f = open({!r}); time.sleep(30)".format(os.path.join(self.source, "state_5.sqlite"))
-        self._assert_busy(subprocess.Popen([sys.executable, "-c", code]))
+        self._assert_busy(subprocess.Popen([sys.executable, "-c", code]),
+                          "path=" + os.path.join(self.source, "state_5.sqlite"))
 
     def test_working_directory(self):
-        self._assert_busy(subprocess.Popen(["sleep", "30"], cwd=self.source))
+        self._assert_busy(subprocess.Popen(["sleep", "30"], cwd=self.source), "usage=cwd path=" + self.source)
 
     def test_same_prefix_is_not_busy(self):
         sibling = os.path.join(self.home, ".codex-shared")

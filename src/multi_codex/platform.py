@@ -8,7 +8,7 @@ import os
 import shutil
 import subprocess
 import sys
-from typing import List, NamedTuple, Optional
+from typing import List, NamedTuple, Optional, Tuple
 
 from .fsutil import is_under
 
@@ -47,8 +47,22 @@ def create_link(target: str, link_path: str) -> None:
 class BusyProcess(NamedTuple):
     pid: int
     command: str
-    # 占用方式：cwd（工作目录）、txt（可执行文件）或其它文件描述符
+    # 占用方式（给人看的）：cwd（工作目录）、executable（可执行文件）、mapped（内存映射）或 fd N（打开的文件）
     usage: str
+    # 落在源目录下的那个路径，让用户一眼看出是哪个文件被占用
+    path: str
+
+
+def describe_usage(fd: str) -> str:
+    """把 lsof 的 fd 字段或 /proc 的条目名翻译成好懂的占用方式；未知值原样返回。"""
+    if fd == "txt":
+        return "executable"
+    if fd == "mem":
+        return "mapped"
+    digits = fd.rstrip("rwuRWU")
+    if digits.isdigit():
+        return "fd " + digits
+    return fd
 
 
 class BusyCheckError(Exception):
@@ -105,7 +119,7 @@ def _scan_with_lsof(root: str, excluded: set) -> List[BusyProcess]:
             fd = value
         elif field == "n" and pid is not None and pid not in excluded:
             if value.startswith("/") and is_under(value, root) and pid not in found:
-                found[pid] = BusyProcess(pid, command, fd)
+                found[pid] = BusyProcess(pid, command, describe_usage(fd), value)
     # Linux 普通用户运行 lsof 时，常因无权读取其它用户的进程而返回非 0 并输出告警；
     # 只有一个进程记录都没有时才视为检查失败，否则会把正常情况误判为失败。
     if proc.returncode != 0 and not has_process_record:
@@ -122,27 +136,28 @@ def _scan_proc(root: str, excluded: set) -> List[BusyProcess]:
         if pid in excluded:
             continue
         base = os.path.join("/proc", entry)
-        usage = _proc_usage(base, root)
-        if usage:
-            found.append(BusyProcess(pid, _proc_command(base), usage))
+        hit = _proc_usage(base, root)
+        if hit:
+            found.append(BusyProcess(pid, _proc_command(base), describe_usage(hit[0]), hit[1]))
     return found
 
 
-def _proc_usage(base: str, root: str) -> str:
+def _proc_usage(base: str, root: str) -> Optional[Tuple[str, str]]:
+    """返回 (占用方式, 路径)；与 lsof 的 fd 字段取值保持一致，交给 describe_usage 统一翻译。"""
     for name, usage in (("cwd", "cwd"), ("exe", "txt")):
         target = _readlink_quiet(os.path.join(base, name))
         if target and is_under(target, root):
-            return usage
+            return usage, target
     fd_dir = os.path.join(base, "fd")
     try:
         fds = os.listdir(fd_dir)
     except OSError:
-        return ""
+        return None
     for fd in fds:
         target = _readlink_quiet(os.path.join(fd_dir, fd))
         if target and target.startswith("/") and is_under(target, root):
-            return fd
-    return ""
+            return fd, target
+    return None
 
 
 def _proc_command(base: str) -> str:

@@ -8,6 +8,11 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- The busy-process report of `migrate-default` now says how each process uses
+  the source (`cwd`, `executable`, `mapped` or `fd N`) and which path it holds.
+
+### Changed
+
 - Setting a SOCKS proxy now prints a warning: Codex sends most requests as HTTP
   CONNECT even with a SOCKS URL, so only ports that also accept HTTP work.
 
