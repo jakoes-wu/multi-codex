@@ -104,7 +104,7 @@ Proxy URLs must not contain a user name or password: launchers are plain, world-
 >
 > - `HTTPS_PROXY` / `HTTP_PROXY` and a lone `ALL_PROXY` are honoured. Every connection (chatgpt.com, ab.chatgpt.com, oaiusercontent.com) went through the proxy, and none bypassed it.
 > - `off` works: with proxy variables set in the parent shell, Codex connected directly.
-> - With a `socks5h://` URL, most connections were still sent as HTTP `CONNECT` requests to that port. A SOCKS proxy therefore only works when its port also speaks HTTP (for example a "mixed" port); a SOCKS-only port will break most requests.
+> - With a `socks5h://` URL, most connections were still sent as HTTP `CONNECT` requests to that port. A SOCKS proxy therefore only works when its port also speaks HTTP (for example a "mixed" port); a SOCKS-only port will break most requests. multi-codex prints a warning whenever you set a SOCKS proxy.
 
 ### Declarative setup with `apply`
 

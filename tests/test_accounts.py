@@ -69,6 +69,17 @@ class LauncherTest(CliTestCase):
         self.assertNotIn("ALL_PROXY", env)
         self.assertNotIn("all_proxy", env)
 
+    def test_socks_proxy_warns_without_changing_exit_code(self):
+        self.assertNotIn("SOCKS proxy", self.ok("add", "a", "--proxy", "7901").err)
+        result = self.ok("proxy", "a", "socks5h://127.0.0.1:1080")
+        self.assertIn("SOCKS proxy", result.err)
+        self.assertIn("mixed", result.err)
+        path = self.write(os.path.join(self.tmp, "c.json"), json.dumps(
+            {"version": 1, "accounts": {"a": {"proxy": "socks5://127.0.0.1:1080"}, "b": {"proxy": "7901"}}}))
+        result = self.ok("apply", "-f", path)
+        self.assertIn("SOCKS proxy for account 'a'", result.err)
+        self.assertNotIn("account 'b'", result.err)
+
     def test_socks_sets_all_proxy(self):
         self.ok("add", "work", "--proxy", "socks5h://127.0.0.1:1080")
         _, _, env, _ = self.run_launcher("work")
