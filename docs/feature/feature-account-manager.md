@@ -194,6 +194,8 @@ Codex CLI 通过环境变量 `CODEX_HOME` 决定配置、凭据、会话数据�
 | 端口，如 `7901` | 展开为 `http://127.0.0.1:7901`，之后按下面的 URL 规则处理 |
 | URL | 设置 `HTTPS_PROXY`、`HTTP_PROXY` 的大写和小写形式；socks 协议再加设 `ALL_PROXY`；非 socks 协议则清除继承来的 `ALL_PROXY`（大小写），因为 curl 等程序会把它用于所有协议，父进程里另一个 `ALL_PROXY` 可能把部分流量带到别的代理；`NO_PROXY` 和 `no_proxy` 各自在原有值后追加 `localhost,127.0.0.1,::1`，不覆盖用户原来的值；原值为空时不留开头的逗号 |
 
+设置为 socks 地址（`socks5://`、`socks5h://`）时照常接受，但在 stderr 给出警告，退出码不变。触发入口为 `add --proxy`、`proxy`、`migrate-default --proxy`，以及 `apply -f` 文件中每个 socks 账号。原因是实测 Codex 拿到 socks 地址时，大部分请求仍按 HTTP CONNECT 发送（见 §10），只有同时支持 HTTP 的端口才能正常工作。
+
 URL 校验规则：
 
 - 协议只允许 `http`、`https`、`socks5`、`socks5h`；
@@ -594,7 +596,7 @@ URL 校验规则：
   - codex 0.159.0 的 `responses_websockets` 功能开关状态为 removed，采样期间没有任何绕过代理的连接，所以不存在走直连的 WebSocket；
   - SOCKS 代理只有在端口同时支持 HTTP 时才能正常使用，README 已建议优先使用 HTTP 代理。
 
-  本工具仍然接受 socks 地址，因为 mixed 端口很常见；是否改为拒绝或警告，留待后续决定。
+  本工具仍然接受 socks 地址，因为 mixed 端口很常见；2026-09-29 用户决定在设置 socks 地址时给出警告（§5.1.3）。
   macOS 上此前的依据是一次手工代理配置核验（在代理软件的连接表中看到 Codex 流量从指定端口进入），没有用本工具生成的启动命令重新测过。
 - **Linux 上 lsof 的表现**：普通用户运行 lsof 时的退出码和 stderr，需要在Linux 测试机（Ubuntu 20.04）上实测，确认“检查失败”的判定规则不会误伤。编码阶段完成，不阻塞开工。
 - **启动命令是否清除 `CODEX_SQLITE_HOME`、`CODEX_API_KEY`、`CODEX_ACCESS_TOKEN`**：一期只给出警告。是否在启动命令里清除，需要看这三个变量在实际使用中的情况，待用户决定。

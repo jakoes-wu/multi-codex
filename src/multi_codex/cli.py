@@ -11,7 +11,7 @@ from typing import List, Optional
 
 from . import __version__, accounts, migrate, platform
 from .actions import error, info, warn
-from .config import (DEFAULT_SHARED_ITEMS, Account, Config, ConfigError, load_config, normalize_proxy,
+from .config import (DEFAULT_SHARED_ITEMS, Account, Config, ConfigError, is_socks, load_config, normalize_proxy,
                      parse_config, validate_name)
 from .fsutil import expand
 from .lock import LockBusyError, WriteLock
@@ -199,6 +199,7 @@ def _load_apply_file(path: str, old: Config) -> Config:
         raise ConfigError("cannot read {}: {}".format(path, exc))
     new = parse_config(raw, path)
     for account in new.accounts.values():
+        _warn_if_socks(account.proxy, account.name)
         current = old.find(account.name)
         account.managed_links = list(current.managed_links) if current else []
     return new
@@ -214,9 +215,24 @@ def _checked_name(name: str) -> str:
 
 def _checked_proxy(value: str) -> str:
     try:
-        return normalize_proxy(value)
+        proxy = normalize_proxy(value)
     except ValueError as exc:
         raise UsageError(str(exc))
+    _warn_if_socks(proxy)
+    return proxy
+
+
+def _warn_if_socks(proxy: str, account: Optional[str] = None) -> None:
+    """socks 地址照常接受，但要提醒：实测 codex-cli 0.159.0 拿到 socks5h 地址时，
+    14 个连接里有 13 个仍按 HTTP CONNECT 发往该端口（见方案 §10）。
+    只支持 SOCKS 的端口会让大部分请求失败，同时支持 HTTP 的 mixed 端口才能正常工作。
+    只提示、不拒绝，也不改变退出码。
+    """
+    if not is_socks(proxy):
+        return
+    where = " for account {!r}".format(account) if account else ""
+    warn("SOCKS proxy{}: Codex sends most requests as HTTP CONNECT even with a SOCKS URL, so this only "
+         "works if {} also accepts HTTP proxy requests (a \"mixed\" port); prefer an HTTP proxy".format(where, proxy))
 
 
 def cmd_list() -> int:

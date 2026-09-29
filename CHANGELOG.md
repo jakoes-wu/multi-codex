@@ -6,6 +6,11 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- Setting a SOCKS proxy now prints a warning: Codex sends most requests as HTTP
+  CONNECT even with a SOCKS URL, so only ports that also accept HTTP work.
+
 ### Added
 
 - `migrate-default`: turn the default `~/.codex` into a named account, with a
