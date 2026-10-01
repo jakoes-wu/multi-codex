@@ -299,7 +299,7 @@ multi-codex use work                    # ~/.codex now points to account "work"
 multi-codex use                         # show the current default account
 ```
 
-From then on, apps started from the Dock use the account `use` points to. `multi-codex restore main` undoes the migration. Both commands refuse to run while a process is using the directories involved; see [Default account](#default-account).
+From then on, apps started from the Dock use the account `use` points to. To undo the migration, point `~/.codex` back at it first: `multi-codex use main`, then `multi-codex restore main` (`restore` refuses while `~/.codex` points to another account). `use` and `restore` refuse to run while a process is using the directories involved, so close Codex first; see [Default account](#default-account).
 
 ### How do I open VS Code with a particular account?
 

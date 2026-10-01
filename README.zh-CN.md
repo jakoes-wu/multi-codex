@@ -389,7 +389,11 @@ multi-codex use work                    # 让 ~/.codex 指向 work 账号
 multi-codex use                         # 查看当前默认账号
 ```
 
-之后从 Dock 启动的应用，用的就是 `use` 指向的账号。`multi-codex restore main` 可以撤销迁移。有进程正在使用相关目录时，这两个命令都会拒绝执行，详见“默认账号”一节。
+之后从 Dock 启动的应用，用的就是 `use` 指向的账号。
+
+要撤销迁移，先让 `~/.codex` 指回原账号：先执行 `multi-codex use main`，再执行 `multi-codex restore main`。`~/.codex` 指向其它账号时，`restore` 会拒绝执行。
+
+有进程正在使用相关目录时，`use` 和 `restore` 都会拒绝执行，所以要先关掉 Codex，详见“默认账号”一节。
 
 ### 怎样用指定的账号打开 VS Code？
 
