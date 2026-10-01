@@ -24,18 +24,20 @@ codex            -> ~/.codex，它本身也可以迁移成其中一个账号
 
 ## 安装
 
-需要 macOS 或 Linux（Windows 请在 WSL 中使用）、Python 3.8 及以上（不需要额外的包），并且 `PATH` 中能找到 Codex CLI。
+需要 macOS 或 Linux（Windows 支持在计划中；WSL 内按 Linux 使用）、Python 3.8 及以上（不需要额外的包）、`tar`、`curl` 或 `wget`，并且 `PATH` 中能找到 Codex CLI。
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/jakoes-wu/multi-codex/main/install.sh | sh
 multi-codex --version
 ```
 
-`multi-codex` 命令装在 `~/.local/bin`。如果 shell 提示 `command not found`，说明这个目录还不在 `PATH` 中；安装脚本只给出提示，不会修改你的 shell 配置文件。把下面这行加到 `~/.zshrc` 或 `~/.bashrc`，再打开一个新终端：
+`multi-codex` 命令和各账号的 `codex-<名称>` 启动命令都在 `~/.local/bin`。如果 shell 提示 `command not found`，说明这个目录还不在 `PATH` 中；安装脚本只给出提示，不会修改你的 shell 配置文件。把下面这行加到 `~/.zshrc` 或 `~/.bashrc`，再打开一个新终端：
 
 ```sh
 export PATH="$HOME/.local/bin:$PATH"
 ```
+
+fish 用户改为执行一次 `fish_add_path ~/.local/bin`。
 
 从克隆的仓库安装、用 pipx 安装、装到其它目录，以及下载包如何校验，见“更多安装方式”一节。
 
@@ -48,7 +50,7 @@ multi-codex add work
 multi-codex add personal
 ```
 
-每条命令会创建一个目录（`~/.cx/work`）和一个启动命令（`codex-work`）。名称可以包含字母、数字和 `._@+-`，也可以直接用邮箱。
+每条命令会创建一个目录（`~/.cx/work`）和一个启动命令（`codex-work`）。名称以字母或数字开头，可以包含字母、数字和 `._@+-`，也可以直接用邮箱。
 
 某个账号需要走代理时，给它一个本地端口或代理 URL，例如 `multi-codex add work --proxy 7901`（等同于 `http://127.0.0.1:7901`），见“代理取值”一节。
 
@@ -70,7 +72,7 @@ codex-personal resume
 
 ```sh
 multi-codex list      # 账号、启动命令的状态、登录的邮箱和套餐
-multi-codex usage     # 每个账号的 5 小时和每周额度用量
+multi-codex usage     # 5 小时和每周额度用量；账号用过之后才有数据，--live 可立即查询
 multi-codex doctor    # 找出问题，并给出修复每个问题的命令
 ```
 
@@ -83,7 +85,7 @@ multi-codex doctor    # 找出问题，并给出修复每个问题的命令
 multi-codex migrate-default main
 ```
 
-这条命令把 `~/.codex` 移到 `~/.cx/main`，在 `~/.codex` 留一个软链，并创建 `codex-main`。直接运行的 `codex`、VS Code 和桌面端都照常可用。以后用 `multi-codex use work` 就能把默认账号换成别的账号。如果 Codex 把登录信息存在系统钥匙串里，命令会停下并说明原因。细节和撤销方法见“迁移 `~/.codex`”一节。
+这条命令把 `~/.codex` 移到 `~/.cx/main`，在 `~/.codex` 留一个软链，并创建 `codex-main`。直接运行的 `codex`、VS Code、桌面端，以及指向 `~/.codex` 下的旧绝对路径都照常可用。以后用 `multi-codex use work` 就能把默认账号换成别的账号。如果 Codex 把登录信息存在系统钥匙串里，命令会停下并说明原因。细节和撤销方法见“迁移 `~/.codex`”一节。
 
 ## 常用操作速查
 
@@ -91,13 +93,13 @@ multi-codex migrate-default main
 | ---- | ---- | ---- |
 | 用某个账号打开 VS Code | `multi-codex code work ~/src/project` | 按账号打开 VS Code 与桌面端 |
 | 用某个账号打开桌面端（macOS） | `multi-codex app work` | 按账号打开 VS Code 与桌面端 |
-| 换掉直接运行 `codex` 和从 Dock 启动时用的账号 | `multi-codex use work` | 默认账号 |
+| 换掉直接运行 `codex` 和从 Dock 启动时用的账号 | `multi-codex use work`（需先 `migrate-default`） | 默认账号 |
 | 在某个项目里固定使用一个账号 | 在项目目录执行 `multi-codex bind work`，之后用 `multi-codex run` | 目录绑定账号 |
 | 设置或修改账号的代理 | `multi-codex proxy work 7901` | 代理取值 |
-| 在账号之间共享 `AGENTS.md`、skills、rules | 先 `multi-codex init --shared-dir ~/.codex-shared`，再 `multi-codex add work --shared` | 共享资源 |
+| 在账号之间共享 `AGENTS.md`、skills、rules | 把要共享的内容放进 `~/.codex-shared`，执行 `multi-codex init --shared-dir ~/.codex-shared`，再 `multi-codex add work --shared` | 共享资源 |
 | 新账号沿用另一个账号的配置 | `multi-codex add new --config-from work` | 从另一个账号复制配置 |
 | 给账号加额外的环境变量 | `multi-codex env work KEY=VALUE` | 每个账号的环境变量 |
-| 在新机器上一次建好所有账号 | `./install.sh --config accounts.json` | 用 `apply` 声明式部署 |
+| 在新机器上一次建好所有账号 | `curl -fsSL https://raw.githubusercontent.com/jakoes-wu/multi-codex/main/install.sh \| sh -s -- --config accounts.json` | 用 `apply` 声明式部署 |
 | 开启 Tab 补全 | `eval "$(multi-codex completion zsh)"` | shell 补全 |
 | 先看看命令会改什么 | 加 `--dry-run` | 命令 |
 | 删除账号 | `multi-codex remove work`（账号目录会保留） | 命令 |
@@ -378,6 +380,7 @@ multi-codex init --shared-dir ~/.codex-shared --shared-items AGENTS.md,skills,ru
 multi-codex add work --shared
 ```
 
+- 先把要共享的条目放进共享目录：共享目录里没有的条目会被跳过（输出 `skip`），不会建链接。
 - multi-codex 只创建缺少的链接，并记住哪些链接是它自己建的。
 - 关闭共享时，只删除它建的那些链接，你自己建的链接不受影响。
 - 如果你以前手工把某个账号软链到了共享目录，可以用 `multi-codex add 名称 --shared --adopt` 让工具接管这些链接：链接本身不重建，但之后关闭共享时也会被删除。只接管已经指向对应共享条目的链接。
@@ -514,7 +517,8 @@ cd multi-codex
 ## 卸载
 
 ```sh
-./install.sh --uninstall
+./install.sh --uninstall                                  # 在克隆的仓库里
+curl -fsSL https://raw.githubusercontent.com/jakoes-wu/multi-codex/main/install.sh | sh -s -- --uninstall    # 没有克隆仓库时
 ```
 
 卸载只删除工具本身，配置、账号目录和 `codex-<名称>` 启动命令都会保留。启动命令不依赖 multi-codex，卸载后仍能继续使用。

@@ -24,18 +24,20 @@ The launchers are plain shell scripts. They keep working even if you uninstall m
 
 ## Install
 
-You need macOS or Linux (on Windows, use WSL), Python 3.8 or newer (no extra packages) and the Codex CLI on your `PATH`.
+You need macOS or Linux (Windows support is planned; inside WSL, use the Linux instructions), Python 3.8 or newer (no extra packages), `tar`, `curl` or `wget`, and the Codex CLI on your `PATH`.
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/jakoes-wu/multi-codex/main/install.sh | sh
 multi-codex --version
 ```
 
-The `multi-codex` command goes to `~/.local/bin`. If your shell says `command not found`, that directory is not on your `PATH` yet; the installer prints a hint but never edits your shell profile. Add this line to `~/.zshrc` or `~/.bashrc` and open a new terminal:
+The `multi-codex` command and the `codex-<name>` launchers go to `~/.local/bin`. If your shell says `command not found`, that directory is not on your `PATH` yet; the installer prints a hint but never edits your shell profile. Add this line to `~/.zshrc` or `~/.bashrc` and open a new terminal:
 
 ```sh
 export PATH="$HOME/.local/bin:$PATH"
 ```
+
+In fish, run `fish_add_path ~/.local/bin` once instead.
 
 Installing from a clone, with pipx or into another directory, and how downloads are verified: see [More installation options](#more-installation-options).
 
@@ -48,7 +50,7 @@ multi-codex add work
 multi-codex add personal
 ```
 
-Each command creates a directory (`~/.cx/work`) and a launcher (`codex-work`). A name may contain letters, digits and `._@+-`; an e-mail address works too.
+Each command creates a directory (`~/.cx/work`) and a launcher (`codex-work`). A name starts with a letter or digit and may contain letters, digits and `._@+-`; an e-mail address works too.
 
 If an account should go through a proxy, give it a local port or a URL, for example `multi-codex add work --proxy 7901` (the same as `http://127.0.0.1:7901`). See [Proxy values](#proxy-values).
 
@@ -70,7 +72,7 @@ codex-personal resume
 
 ```sh
 multi-codex list      # accounts, launcher state, logged-in e-mail and plan
-multi-codex usage     # 5-hour and weekly usage of each account
+multi-codex usage     # 5-hour and weekly usage; empty until you have used an account (--live asks right away)
 multi-codex doctor    # finds problems and prints the command that fixes each one
 ```
 
@@ -83,7 +85,7 @@ Your existing `~/.codex` can become an account as well, so you do not have to lo
 multi-codex migrate-default main
 ```
 
-This moves `~/.codex` to `~/.cx/main`, leaves a link at `~/.codex` and creates `codex-main`. Plain `codex`, VS Code and the desktop app keep working as before. Later, `multi-codex use work` makes another account the default. If Codex keeps your login in the system keyring, the command stops and explains why. Details and how to undo it: [Migrating `~/.codex`](#migrating-codex).
+This moves `~/.codex` to `~/.cx/main`, leaves a link at `~/.codex` and creates `codex-main`. Plain `codex`, VS Code, the desktop app and old absolute paths under `~/.codex` keep working as before. Later, `multi-codex use work` makes another account the default. If Codex keeps your login in the system keyring, the command stops and explains why. Details and how to undo it: [Migrating `~/.codex`](#migrating-codex).
 
 ## Common tasks
 
@@ -91,13 +93,13 @@ This moves `~/.codex` to `~/.cx/main`, leaves a link at `~/.codex` and creates `
 | ---- | ---- | ---- |
 | Open VS Code with an account | `multi-codex code work ~/src/project` | [VS Code and the desktop app](#vs-code-and-the-desktop-app-experimental) |
 | Open the desktop app with an account (macOS) | `multi-codex app work` | [VS Code and the desktop app](#vs-code-and-the-desktop-app-experimental) |
-| Change the account that plain `codex` and the Dock apps use | `multi-codex use work` | [Default account](#default-account) |
+| Change the account that plain `codex` and the Dock apps use | `multi-codex use work` (after `migrate-default`) | [Default account](#default-account) |
 | Always use one account inside a project | In the project directory: `multi-codex bind work`, then `multi-codex run` | [Directory bindings](#directory-bindings) |
 | Set or change an account's proxy | `multi-codex proxy work 7901` | [Proxy values](#proxy-values) |
-| Share `AGENTS.md`, skills and rules between accounts | `multi-codex init --shared-dir ~/.codex-shared`, then `multi-codex add work --shared` | [Shared resources](#shared-resources) |
+| Share `AGENTS.md`, skills and rules between accounts | Put them in `~/.codex-shared`, run `multi-codex init --shared-dir ~/.codex-shared`, then `multi-codex add work --shared` | [Shared resources](#shared-resources) |
 | Start a new account with another account's settings | `multi-codex add new --config-from work` | [Copying settings](#copying-settings-from-another-account) |
 | Give an account extra environment variables | `multi-codex env work KEY=VALUE` | [Environment variables](#per-account-environment-variables) |
-| Set up all accounts on a new machine | `./install.sh --config accounts.json` | [Declarative setup](#declarative-setup-with-apply) |
+| Set up all accounts on a new machine | `curl -fsSL https://raw.githubusercontent.com/jakoes-wu/multi-codex/main/install.sh \| sh -s -- --config accounts.json` | [Declarative setup](#declarative-setup-with-apply) |
 | Get tab completion | `eval "$(multi-codex completion zsh)"` | [Shell completion](#shell-completion) |
 | See what a command would change | add `--dry-run` | [Commands](#commands) |
 | Remove an account | `multi-codex remove work` (the directory is kept) | [Commands](#commands) |
@@ -298,7 +300,7 @@ multi-codex init --shared-dir ~/.codex-shared --shared-items AGENTS.md,skills,ru
 multi-codex add work --shared
 ```
 
-multi-codex creates the missing links and remembers which links it created. Turning sharing off removes only those links; links you made yourself are left alone. A real file or directory at a link location is a conflict and is never overwritten.
+Put the items you want to share into the shared directory first: items missing from it are skipped (`skip`), and nothing is linked for them. multi-codex creates the missing links and remembers which links it created. Turning sharing off removes only those links; links you made yourself are left alone. A real file or directory at a link location is a conflict and is never overwritten.
 
 If you already linked an account to the shared directory by hand, `multi-codex add NAME --shared --adopt` takes those links over without recreating them: from then on, turning sharing off removes them as well. Only links that already point to the matching shared item are adopted.
 
@@ -410,7 +412,8 @@ The tool goes to `~/.local/share/multi-codex` and the `multi-codex` command to `
 ## Uninstalling
 
 ```sh
-./install.sh --uninstall
+./install.sh --uninstall                                  # from a clone
+curl -fsSL https://raw.githubusercontent.com/jakoes-wu/multi-codex/main/install.sh | sh -s -- --uninstall    # without a clone
 ```
 
 This removes the tool only. Your configuration, account directories and `codex-<name>` launchers stay; the launchers keep working because they do not depend on multi-codex.
