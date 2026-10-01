@@ -68,13 +68,16 @@ class Account(object):
 
 class Config(object):
     def __init__(self, root: str, bin_dir: str, shared_dir: Optional[str],
-                 shared_items: List[str], accounts: Dict[str, Account]) -> None:
+                 shared_items: List[str], accounts: Dict[str, Account],
+                 bindings: Optional[Dict[str, str]] = None) -> None:
         self.root = root
         self.bin_dir = bin_dir
         self.shared_dir = shared_dir
         self.shared_items = list(shared_items)
         # 键保持账号名的原始大小写；查找一律经 find() 做大小写不敏感匹配。
         self.accounts = accounts
+        # 目录绑定：规范路径（binding.normalize_dir）-> 账号名。属于本机状态，apply -f 时沿用当前值。
+        self.bindings = dict(bindings or {})
 
     def find(self, name: str) -> Optional[Account]:
         """按大小写不敏感匹配查找账号。
@@ -90,16 +93,20 @@ class Config(object):
 
     def copy(self) -> "Config":
         return Config(self.root, self.bin_dir, self.shared_dir, self.shared_items,
-                      {key: value.copy() for key, value in self.accounts.items()})
+                      {key: value.copy() for key, value in self.accounts.items()}, dict(self.bindings))
 
     def to_dict(self) -> dict:
-        return {
+        data = {
             "version": CONFIG_VERSION,
             "root": self.root,
             "bin_dir": self.bin_dir,
             "shared": {"dir": self.shared_dir, "items": list(self.shared_items)},
             "accounts": {name: account.to_dict() for name, account in self.accounts.items()},
         }
+        # 没有绑定时不写这个字段，0.4.0 的配置序列化结果保持不变（原因同 Account.to_dict 的 env）。
+        if self.bindings:
+            data["bindings"] = {path: self.bindings[path] for path in sorted(self.bindings)}
+        return data
 
 
 def default_config() -> Config:
@@ -174,7 +181,16 @@ def parse_config(raw: str, source: str) -> Config:
                 source, seen[folded], name))
         seen[folded] = name
         accounts[name] = _parse_account(name, value, source)
-    return Config(root, bin_dir, shared_dir, shared_items, accounts)
+
+    bindings = data.get("bindings", {})
+    if not isinstance(bindings, dict):
+        raise ConfigError("{}: 'bindings' must be an object".format(source))
+    for path, name in bindings.items():
+        # 不要求账号已登记：悬空的绑定由 doctor 报告，不让整个配置无法加载。
+        if not isinstance(path, str) or not os.path.isabs(path) or not isinstance(name, str) \
+                or not NAME_PATTERN.match(name):
+            raise ConfigError("{}: invalid binding {!r} -> {!r}".format(source, path, name))
+    return Config(root, bin_dir, shared_dir, shared_items, accounts, bindings)
 
 
 def _string_field(data: dict, key: str, default: str, source: str) -> str:

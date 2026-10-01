@@ -60,6 +60,7 @@ def run_checks() -> List[Check]:
         if found is not None:
             identities.append((name, found))
     checks.append(_check_duplicates(identities))
+    checks.append(_check_bindings(config))
     return checks
 
 
@@ -204,6 +205,21 @@ def _check_duplicates(identities) -> Check:
         return Check("duplicates", OK, "no two accounts share one ChatGPT login")
     return Check("duplicates", WARN, "; ".join("{} are logged in as the same ChatGPT account".format(
         ", ".join(group)) for group in groups), "log one of them in with another ChatGPT account")
+
+
+def _check_bindings(config) -> Check:
+    """悬空的目录绑定：账号已注销或目录已删除。只报 warn，run 遇到时会给出明确的报错。"""
+    problems = []
+    for path in sorted(config.bindings):
+        name = config.bindings[path]
+        if config.find(name) is None:
+            problems.append("{} -> {} (account is not registered)".format(path, name))
+        elif not os.path.isdir(path):
+            problems.append("{} -> {} (directory does not exist)".format(path, name))
+    if problems:
+        return Check("bindings", WARN, "{} stale binding(s)".format(len(problems)),
+                     "multi-codex unbind <directory>", tuple(problems))
+    return Check("bindings", OK, "{} binding(s)".format(len(config.bindings)))
 
 
 def to_json(checks: List[Check]) -> dict:

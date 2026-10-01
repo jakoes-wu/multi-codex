@@ -172,6 +172,9 @@ Codex CLI 通过环境变量 `CODEX_HOME` 决定配置、凭据、会话数据�
 | `doctor [--json]` | 体检 | 只读、不加锁；见 `feature-account-insight.md` |
 | `completion`、`run`、`path`、`env` | 补全、在账号环境下运行命令、输出目录、每账号环境变量 | 见 `docs/feature/feature-cli-ergonomics.md` |
 | `use [名称]`、`restore 名称` | 切换默认账号、撤销迁移 | 见 `docs/feature/feature-default-switch.md` |
+| `bind`、`unbind`，以及 `run` 省略名称 | 目录绑定账号 | 见 `docs/feature/feature-dir-binding.md` |
+| `add --config-from` | 复制另一个账号的 `config.toml` | 见 `docs/feature/feature-config-copy.md` |
+| `code`、`app` | 按账号打开 VS Code、桌面端（实验） | 见 `docs/feature/feature-app-launch.md` |
 
 各命令的补充规则：
 

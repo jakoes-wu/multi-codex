@@ -56,6 +56,7 @@ curl -fsSL https://raw.githubusercontent.com/jakoes-wu/multi-codex/main/install.
 - 工具本身装到 `~/.local/share/multi-codex`，`multi-codex` 命令装到 `~/.local/bin`；要换位置，用 `--prefix DIR` 指定。
 - 请确认 `~/.local/bin` 在 `PATH` 中。安装脚本只给出提示，不会修改你的 shell 配置文件。
 - 也可以用 pipx 安装：`pipx install git+https://github.com/jakoes-wu/multi-codex`。
+- **校验**：从 v0.5.0 起，每个 release 都附带 `multi-codex-<tag>.tar.gz` 和 `SHA256SUMS`。远程安装会下载这个包，先校验 SHA-256，不一致就停止安装。安装分支或更早的版本时没有校验，安装脚本会明确提示；设置 `MULTI_CODEX_REQUIRE_CHECKSUM=1` 可以拒绝这种安装。校验和与安装包放在同一个 release 里，只能发现下载过程中的损坏或篡改，不能防范 GitHub 账号本身被攻破。
 - 全部安装选项见 `./install.sh --help`。
 
 ## 快速开始
@@ -80,14 +81,17 @@ multi-codex list
 | ---- | ---- |
 | `multi-codex init [--root DIR] [--bin-dir DIR] [--shared-dir DIR] [--shared-items A,B]` | 创建或修改全局设置 |
 | `multi-codex migrate-default 名称 [--source DIR] [--copy] [--keep-backup] [--proxy P] [--skip-process-check] [--accept-relogin]` | 把默认目录迁移成账号 |
-| `multi-codex add 名称 [--proxy P] [--shared \| --no-shared] [--adopt]` | 新增账号、登记已有目录，或修改账号选项 |
+| `multi-codex add 名称 [--proxy P] [--shared \| --no-shared] [--adopt] [--config-from 其它账号]` | 新增账号、登记已有目录，或修改账号选项；`--config-from` 从另一个账号复制一次 `config.toml` |
 | `multi-codex proxy 名称 端口\|URL\|off\|inherit` | 设置账号的代理 |
 | `multi-codex remove 名称` | 注销账号，删除它的启动命令。**账号目录会保留** |
 | `multi-codex apply [-f 文件]` | 按配置（或指定文件）收敛全部账号 |
 | `multi-codex list [--json]` | 列出账号、启动命令的状态和登录身份 |
 | `multi-codex usage [名称 ...] [--live] [--timeout 秒] [--json]` | 显示额度用量 |
 | `multi-codex doctor [--json]` | 检查安装、配置和各账号，只读 |
-| `multi-codex run 名称 [-- 命令 ...]` | 在账号的环境下运行命令（默认运行 `codex`） |
+| `multi-codex run [名称] [-- 命令 ...]` | 在账号的环境下运行命令（默认运行 `codex`）；省略名称时，使用当前目录绑定的账号 |
+| `multi-codex bind [名称 [目录]]` / `unbind [目录]` | 把目录绑定到账号、列出绑定，或解除绑定 |
+| `multi-codex code 名称 [路径] [-- 参数]` | 按账号打开 VS Code（实验功能） |
+| `multi-codex app 名称` | 按账号打开 Codex 桌面端（仅 macOS，实验功能） |
 | `multi-codex path 名称` | 输出账号目录 |
 | `multi-codex env 名称 [KEY=VALUE ...] [--unset KEY] [--clear]` | 列出或修改账号的额外环境变量 |
 | `multi-codex use [名称] [--skip-process-check]` | 显示或切换默认账号（`~/.codex` 指向的账号） |
@@ -142,6 +146,31 @@ multi-codex completion fish | source      # 写进 ~/.config/fish/config.fish
 
 `multi-codex path 名称` 输出账号目录。
 
+### 目录绑定账号
+
+```sh
+cd ~/work/project && multi-codex bind work     # 这个目录及其所有子目录都使用 work
+multi-codex run -- codex resume                # 在这里不用写账号名
+multi-codex bind                               # 列出绑定，* 标出对当前目录生效的那一条
+multi-codex unbind                             # 解除当前目录的绑定
+```
+
+- **查找规则**：`run` 不带账号名时，从当前目录开始逐级向上，使用最近一个已绑定的目录。
+- **存放位置**：绑定保存在 `config.json` 中，不会往项目目录写任何文件。
+- **路径匹配**：以目录的真实路径为准，即解析软链后的路径；在不区分大小写的文件系统上，使用磁盘上的真实大小写。
+- **与其它命令的关系**：`apply -f` 保留现有的绑定；注销账号时（`remove`、`restore`、`apply -f`），它的绑定会一并删除。
+- **降级**：旧版本的 multi-codex 会在下一次写配置时丢掉 `bindings` 字段。
+
+### 从另一个账号复制配置
+
+`multi-codex add new --config-from work` 把 `work` 的 `config.toml` 复制一次到 `new`，之后两份文件各自独立。
+
+以下情况视为冲突，什么都不写：
+- `new` 已有内容不同的 `config.toml`；
+- `new` 共享了 `config.toml`。
+
+复制的是整个文件，包括 `cli_auth_credentials_store` 设置，以及指向原账号的绝对路径。
+
 ### 每个账号的环境变量
 
 ```sh
@@ -156,6 +185,25 @@ multi-codex env work --clear
 - **保留变量**：`CODEX_HOME` 和代理变量不能在这里设置，代理请用 `multi-codex proxy`。
 - **保护范围**：设置了环境变量的启动命令只有你自己能读（权限 0700），`list --json` 也只显示变量名。但值仍以明文保存，需要更强保护的密钥不要放在这里。
 - **降级前先清空**：旧版本的 multi-codex 会忽略 `env` 字段，并在下一次写配置时丢掉它；降级前请先执行 `multi-codex env 名称 --clear`。
+
+### 按账号打开 VS Code 与桌面端（实验功能）
+
+```sh
+multi-codex code work ~/src/project        # 打开一个使用 work 账号的独立 VS Code 窗口
+multi-codex app work                       # 打开一个独立的 Codex 桌面端实例（macOS）
+```
+
+这两个命令依赖 VS Code 和桌面端没有公开的行为，验证过的版本是 VS Code 1.139.1、OpenAI 扩展 26.928.31416、Codex 桌面端 26.831.11858。它们升级后可能失效。
+
+`code`：
+- 以账号的环境（与 `run` 相同）运行 `code --user-data-dir <root>/.apps/<名称>/vscode`。
+- 每个账号有自己的 VS Code 设置，扩展则共用 `~/.vscode/extensions`。
+- 在 macOS 上，`code` 命令会把全部环境变量（包括账号的环境变量）交给 `open --env`，这些值会在进程列表里短暂可见。
+
+`app`：
+- 通过 `open -n` 启动 `/Applications/ChatGPT.app`（bundle id `com.openai.codex`），`CODEX_HOME` 设为账号目录，使用独立的数据目录 `<root>/.apps/<名称>/desktop`，输出写到同目录下的 `desktop.log`。
+- 桌面端会加载登录 shell 的环境，所以它使用 shell 的代理设置，不使用账号的代理；账号的额外环境变量也不会传过去。
+- 请一次只在一个实例中登录：登录回调使用本机固定的端口。
 
 ### 默认账号
 
