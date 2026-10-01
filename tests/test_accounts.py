@@ -198,6 +198,63 @@ class SharedTest(CliTestCase):
         self.assertTrue(os.path.islink(os.path.join(account, "skills")))
         self.assertFalse(os.path.lexists(os.path.join(account, "AGENTS.md")))
 
+    def _user_links(self, items):
+        account = os.path.join(self.root, "work")
+        for item in items:
+            os.symlink(os.path.join(self.shared, item), os.path.join(account, item))
+        return account
+
+    def test_adopt_existing_links(self):
+        """§8 第 1、2 条：接管用户自建的软链，不重建；再次执行全部 unchanged；接管后关闭共享会删除它们。"""
+        self.ok("add", "work")
+        account = self._user_links(["AGENTS.md", "skills"])
+        before = {item: os.lstat(os.path.join(account, item)).st_ino for item in ("AGENTS.md", "skills")}
+        result = self.ok("add", "work", "--shared", "--adopt")
+        self.assertIn("update shared-link {} (adopted)".format(os.path.join(account, "skills")), result.out)
+        self.assertEqual(self.managed_links("work"), ["AGENTS.md", "skills"])
+        after = {item: os.lstat(os.path.join(account, item)).st_ino for item in ("AGENTS.md", "skills")}
+        self.assertEqual(before, after, "adopted links must not be recreated")
+        again = self.ok("add", "work", "--shared", "--adopt")
+        self.assertNotIn("] update", again.out)
+        self.ok("add", "work", "--no-shared")
+        self.assertFalse(os.path.lexists(os.path.join(account, "skills")))
+        self.assertFalse(os.path.lexists(os.path.join(account, "AGENTS.md")))
+        self.assertTrue(os.path.exists(os.path.join(self.shared, "skills", "s.md")))
+
+    def test_adopt_on_already_shared_account(self):
+        self.ok("add", "work")
+        account = self._user_links(["skills"])
+        self.ok("add", "work", "--shared")
+        self.assertEqual(self.managed_links("work"), ["AGENTS.md"])
+        self.ok("add", "work", "--adopt")
+        self.assertEqual(self.managed_links("work"), ["AGENTS.md", "skills"])
+        self.assertTrue(os.path.islink(os.path.join(account, "skills")))
+
+    def test_adopt_requires_sharing(self):
+        """§8 第 4 条。"""
+        self.ok("add", "work")
+        self._user_links(["skills"])
+        before = self.snapshot()
+        result = self.run_cli("add", "work", "--adopt")
+        self.assertEqual(result.code, 2, result)
+        self.assertIn("--adopt requires sharing", result.err)
+        self.assertEqual(before, self.snapshot())
+
+    def test_adopt_does_not_bypass_conflicts(self):
+        """§8 第 5、6 条：其它项冲突时什么都不接管；指向别处的软链仍是冲突。"""
+        self.ok("add", "work")
+        account = self._user_links(["skills"])
+        os.makedirs(os.path.join(self.shared, "rules"))
+        os.symlink(self.tmp, os.path.join(account, "rules"))
+        before = self.snapshot()
+        result = self.run_cli("add", "work", "--shared", "--adopt")
+        self.assertEqual(result.code, 3, result)
+        self.assertEqual(before, self.snapshot())
+        os.unlink(os.path.join(account, "rules"))
+        os.makedirs(os.path.join(account, "rules"))
+        self.assertEqual(self.run_cli("add", "work", "--shared", "--adopt").code, 3)
+        self.assertEqual(self.managed_links("work"), [])
+
     def test_item_removed_from_shared_items(self):
         self.ok("add", "work", "--shared")
         self.ok("init", "--shared-items", "AGENTS.md")

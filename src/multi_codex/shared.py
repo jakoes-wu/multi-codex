@@ -15,8 +15,12 @@ from .fsutil import KIND_LINK, KIND_MISSING, entry_kind, expand, same_target
 
 
 def plan_shared(new: Config, account: Account, account_dir: str,
-                old_shared_dir: Optional[str]) -> List[Action]:
+                old_shared_dir: Optional[str], adopt: bool = False) -> List[Action]:
     """为一个账号生成共享链接动作，并就地更新 account.managed_links。
+
+    adopt 为真时（`add --adopt`），已经指向对应共享条目、但不在名单里的软链会被写进名单（接管），
+    链接本身不动。只接管“指向正确”的软链：指向别处的软链和真实目录照旧判冲突，
+    以免把用户另有用途的东西交给工具，之后关闭共享时被删掉。
 
     old_shared_dir 是变更前的共享目录：修改 shared.dir 后，
     仍指向旧目录的受管链接需要改指向新目录，而不是被当成“指向别处”的冲突。
@@ -48,9 +52,15 @@ def plan_shared(new: Config, account: Account, account_dir: str,
                                   _create_link(source, link)))
             kept.append(item)
         elif kind == KIND_LINK and same_target(link, source):
-            actions.append(Action(UNCHANGED, "shared-link", link))
             if item in managed:
+                actions.append(Action(UNCHANGED, "shared-link", link))
                 kept.append(item)
+            elif adopt:
+                # 没有文件操作：接管只体现在 config.json 的 managed_links 里。
+                actions.append(Action(UPDATE, "shared-link", link, "adopted"))
+                kept.append(item)
+            else:
+                actions.append(Action(UNCHANGED, "shared-link", link))
         elif kind == KIND_LINK and item in managed and _points_to(link, old_root, item):
             actions.append(Action(UPDATE, "shared-link", link, "-> " + source,
                                   _replace_link(source, link)))

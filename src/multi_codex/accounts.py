@@ -37,13 +37,14 @@ def account_dir(config: Config, name: str) -> str:
 
 def plan(old: Config, new: Config, *, config_exists: bool = True,
          orphan_scope: Union[str, FrozenSet[str]] = NO_ORPHANS,
-         assume_dirs: Iterable[str] = ()) -> List[Action]:
+         assume_dirs: Iterable[str] = (), adopt_accounts: FrozenSet[str] = frozenset()) -> List[Action]:
     """生成从 old 收敛到 new 所需的全部动作。只读文件系统，不做任何修改。
 
     orphan_scope：要清理的孤儿启动命令的账号名集合（casefold 后比较）；ALL_ORPHANS 表示全部清理，
     NO_ORPHANS 表示不清理。只有 apply 和 remove 需要清理孤儿。
     assume_dirs：视为已存在的账号目录。迁移在移动数据前做预检时，目标目录还不存在，
     但迁移完成后它一定存在，不应计划“创建目录”。
+    adopt_accounts：要接管已有共享软链的账号名集合（casefold 后比较），只有 `add --adopt` 会传入。
     """
     actions: List[Action] = []
     assumed = {expand(path) for path in assume_dirs}
@@ -72,7 +73,8 @@ def plan(old: Config, new: Config, *, config_exists: bool = True,
         if old_account is not None and old_bin != new_bin:
             actions.extend(_plan_launcher_delete(old_bin, old_account.name, planned_deletes,
                                                  "bin_dir changed"))
-        actions.extend(shared.plan_shared(new, account, directory, old.shared_dir))
+        actions.extend(shared.plan_shared(new, account, directory, old.shared_dir,
+                                          adopt=account.name.casefold() in adopt_accounts))
 
     for old_account in old.accounts.values():
         if new.find(old_account.name) is None:
@@ -180,9 +182,10 @@ def execute(old: Config, new: Config, actions: List[Action], *, dry_run: bool) -
 
 
 def converge(old: Config, new: Config, *, config_exists: bool, dry_run: bool,
-             orphan_scope: Union[str, FrozenSet[str]] = NO_ORPHANS, assume_dirs: Iterable[str] = ()) -> int:
+             orphan_scope: Union[str, FrozenSet[str]] = NO_ORPHANS, assume_dirs: Iterable[str] = (),
+             adopt_accounts: FrozenSet[str] = frozenset()) -> int:
     actions = plan(old, new, config_exists=config_exists, orphan_scope=orphan_scope,
-                   assume_dirs=assume_dirs)
+                   assume_dirs=assume_dirs, adopt_accounts=adopt_accounts)
     return execute(old, new, actions, dry_run=dry_run)
 
 
