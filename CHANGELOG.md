@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-09-30
+
 ### Added
 
 - `add --adopt`: take over existing links that already point to the shared
@@ -29,5 +31,6 @@ First release (macOS and Linux).
 - Optional shared resources linked from one directory into selected accounts.
 - `install.sh` with `--config`, `--prefix` and `--uninstall`.
 
-[Unreleased]: https://github.com/jakoes-wu/multi-codex/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/jakoes-wu/multi-codex/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/jakoes-wu/multi-codex/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/jakoes-wu/multi-codex/releases/tag/v0.1.0
