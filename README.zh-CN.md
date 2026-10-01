@@ -23,6 +23,8 @@ codex            -> ~/.codex，它本身也可以迁移成其中一个账号
   - 遇到不归本工具管理的文件时报告冲突，不做任何修改；
   - 迁移被中断后，重跑会从中断处继续。
 - **可选的共享资源**：把 `AGENTS.md`、`skills`、`rules`、`agents` 等从同一个共享目录软链到指定账号。
+- **看得到登录身份和剩余额度**：`list` 显示每个账号登录的邮箱和套餐；`usage` 从本地会话记录显示 5 小时和每周额度，加 `--live` 时查询实时额度。
+- **体检**：`doctor` 检查安装、环境和各账号，并给出修复每个问题的命令。
 
 ## 环境要求
 
@@ -72,14 +74,46 @@ multi-codex list
 | 命令 | 作用 |
 | ---- | ---- |
 | `multi-codex init [--root DIR] [--bin-dir DIR] [--shared-dir DIR] [--shared-items A,B]` | 创建或修改全局设置 |
-| `multi-codex migrate-default 名称 [--source DIR] [--copy] [--keep-backup] [--proxy P] [--skip-process-check]` | 把默认目录迁移成账号 |
+| `multi-codex migrate-default 名称 [--source DIR] [--copy] [--keep-backup] [--proxy P] [--skip-process-check] [--accept-relogin]` | 把默认目录迁移成账号 |
 | `multi-codex add 名称 [--proxy P] [--shared \| --no-shared] [--adopt]` | 新增账号、登记已有目录，或修改账号选项 |
 | `multi-codex proxy 名称 端口\|URL\|off\|inherit` | 设置账号的代理 |
 | `multi-codex remove 名称` | 注销账号，删除它的启动命令。**账号目录会保留** |
 | `multi-codex apply [-f 文件]` | 按配置（或指定文件）收敛全部账号 |
-| `multi-codex list` | 列出账号及其启动命令的状态 |
+| `multi-codex list [--json]` | 列出账号、启动命令的状态和登录身份 |
+| `multi-codex usage [名称 ...] [--live] [--timeout 秒] [--json]` | 显示额度用量 |
+| `multi-codex doctor [--json]` | 检查安装、配置和各账号，只读 |
 
-所有写命令都支持 `--dry-run`。
+所有写命令都支持 `--dry-run`。`list`、`usage`、`doctor` 不会修改任何东西；加 `--json` 时，stdout 上只输出一个 JSON 对象（带 `"version": 1` 字段），警告仍写到 stderr。脚本请使用 `--json`：表格格式不保证稳定。
+
+### 登录身份与额度
+
+`list` 增加了 LOGIN 和 PLAN 两列，内容读自各账号本地的 `auth.json`。不会输出任何令牌，也不会联网。LOGIN 列可能是：
+- 邮箱；
+- `api-key`；
+- `-`：未登录；
+- `keyring`：凭据存在系统钥匙串里，无法从文件读取；
+- `unreadable`：凭据文件读不了。
+
+PLAN 是当前令牌签发时的套餐，Codex 下次刷新令牌后才会更新。两个账号登录的是同一个 ChatGPT 用户和工作区时，`list` 会给出警告，因为它们共用一份额度。
+
+`multi-codex usage` 从各账号的会话记录（`sessions/` 和 `archived_sessions/`）中读取最近一次的额度快照。这种方式不联网，但数据可能已经过时；快照之后已经重置的窗口显示为 `reset since snapshot`。
+
+`multi-codex usage --live` 通过该账号的启动命令运行 `codex app-server`，所以会使用该账号的代理；然后向它查询当前额度（`account/rateLimits/read`，需要 Codex 0.48.0 或更高版本）。multi-codex 自己不读取、也不发送令牌。与平常运行 Codex 一样，Codex 可能刷新该账号的令牌并写回该账号的目录。多个账号依次查询，`--timeout` 限制每个账号的总耗时（默认 30 秒）。
+
+### 体检
+
+`multi-codex doctor` 每项检查输出一行（`ok`、`warn` 或 `fail`），有问题时再加一行 `fix:`，给出要执行的命令。检查内容：
+- `codex` 可执行文件及其版本；
+- 配置文件；
+- 未完成的迁移；
+- `bin_dir` 是否在 `PATH` 中；
+- 会破坏隔离的环境变量；
+- `~/.codex` 指向哪里；
+- 实际文件与配置是否一致（与 `apply` 会执行的计划相同）；
+- 各账号的登录状态；
+- 重复登录。
+
+它不修复任何东西，也不联网。有任一项为 fail 时退出码为 1，否则为 0。
 
 ### 默认位置
 
@@ -141,11 +175,16 @@ multi-codex apply -f accounts.json
 
 执行 `multi-codex migrate-default main` 时，工具按以下步骤进行：
 
-1. **占用检查**：只要有进程在 `~/.codex` 里打开了文件、把工作目录设在其中，或者可执行文件位于其中，就拒绝开始。请先关闭 Codex、IDE 扩展和 ChatGPT 浏览器扩展宿主。
-2. **移动数据**：
+1. **凭据存储检查**：以下情况拒绝开始：
+   - Codex 把凭据存在系统钥匙串里，即 `config.toml` 或 `/etc/codex/config.toml` 中设置了 `cli_auth_credentials_store = "keyring"`；
+   - 设置为 `"auto"`，且目录中没有 `auth.json`。
+
+   钥匙串条目和目录路径绑定，迁移后会丢失登录。确实要迁移时加 `--accept-relogin`，迁移完成后重新登录即可。
+2. **占用检查**：只要有进程在 `~/.codex` 里打开了文件、把工作目录设在其中，或者可执行文件位于其中，就拒绝开始。请先关闭 Codex、IDE 扩展和 ChatGPT 浏览器扩展宿主。
+3. **移动数据**：
    - `~/.codex` 和 `~/.cx` 在同一个文件系统上时，直接把 `~/.codex` 改名为 `~/.cx/main`；
    - 不在同一个文件系统上时，先复制，再逐个文件用 SHA-256 校验，然后把原目录改名为 `~/.codex.multi-codex-bak.<时间戳>` 暂存。
-3. **建链接并登记**：创建软链 `~/.codex -> ~/.cx/main`，并登记账号。
+4. **建链接并登记**：创建软链 `~/.codex -> ~/.cx/main`，并登记账号。
 
 **中断与续跑**
 
@@ -192,9 +231,9 @@ multi-codex add work --shared
 | 退出码 | 含义 |
 | ---- | ---- |
 | 0 | 成功，或已处于目标状态 |
-| 1 | 运行错误（IO 错误、配置文件不合法、校验失败、锁被其它命令占用） |
+| 1 | 运行错误（IO 错误、配置文件不合法、校验失败、锁被其它命令占用）；`usage` 中至少一个账号失败；`doctor` 中至少一项检查为 fail |
 | 2 | 命令行参数不合法 |
-| 3 | 与不归 multi-codex 管理的文件冲突，没有做任何修改 |
+| 3 | 与不归 multi-codex 管理的文件冲突，或因凭据存在系统钥匙串而拒绝迁移；没有做任何修改 |
 | 4 | 迁移源目录正被占用 |
 
 ## 卸载

@@ -145,7 +145,7 @@ Codex CLI 通过环境变量 `CODEX_HOME` 决定配置、凭据、会话数据�
 
 `--dry-run` 只执行到第 3 步，把动作列表打印出来。
 
-存在未完成的迁移事务记录时，只有 `migrate-default`（续跑）、`list` 和 `--dry-run` 可以执行。但事务记录损坏时，`list` 也返回 1（见 §9）。其它写命令一律返回 1，并提示先完成迁移。这样可以防止迁移中途根目录或账号被改动。
+存在未完成的迁移事务记录时，只有 `migrate-default`（续跑）、`list`、`usage`、`doctor` 和 `--dry-run` 可以执行；`usage` 与 `doctor` 在读取事务记录之前分派，记录损坏时也能运行。但事务记录损坏时，`list` 也返回 1（见 §9）。其它写命令一律返回 1，并提示先完成迁移。这样可以防止迁移中途根目录或账号被改动。
 
 原子写入（`fsutil.atomic_write`）的做法：先写同目录下的临时文件，`fsync` 后再用 `os.replace` 覆盖目标。
 
@@ -162,12 +162,14 @@ Codex CLI 通过环境变量 `CODEX_HOME` 决定配置、凭据、会话数据�
 | 命令 | 作用 | 再次执行的结果 |
 | ---- | ---- | ---- |
 | `init [--root] [--bin-dir] [--shared-dir] [--shared-items]` | 创建或修改全局配置 | 参数相同时输出 unchanged |
-| `migrate-default <名称> [--source] [--copy] [--keep-backup] [--proxy] [--skip-process-check]` | 把默认目录迁移成账号 | 已完成时输出 already migrated；上次中断时从中断处继续 |
+| `migrate-default <名称> [--source] [--copy] [--keep-backup] [--proxy] [--skip-process-check] [--accept-relogin]` | 把默认目录迁移成账号 | 已完成时输出 already migrated；上次中断时从中断处继续；凭据存在系统钥匙串时拒绝，见 `docs/bugfix/fix-keyring-migration.md` |
 | `add <名称> [--proxy P] [--shared \| --no-shared] [--adopt]` | 新增账号、登记已有目录，或修改账号选项；`--adopt` 见 `feature-adopt-links.md` | 与现状相同时输出 unchanged |
 | `proxy <名称> <端口 \| URL \| off \| inherit>` | 设置代理并重新生成启动命令 | 值相同时输出 unchanged |
 | `remove <名称>` | 注销账号，删除受管启动命令和本工具建立的共享链接；账号目录保留 | 账号不存在时输出 not registered，同时清理该名字的孤儿启动命令，返回 0 |
 | `apply [-f 文件]` | 带 `-f` 时，以该文件为新配置，否则以当前 `config.json` 为新配置；按 §5.1.1 的顺序执行，收敛全部账号并清理孤儿启动命令 | 已收敛时全部输出 unchanged |
-| `list` | 列出账号、目录、代理和启动命令状态 | 只读 |
+| `list [--json]` | 列出账号、目录、代理、启动命令状态和登录身份 | 只读；身份列见 `docs/feature/feature-account-insight.md` |
+| `usage [名称 ...] [--live] [--timeout 秒] [--json]` | 显示额度 | 只读、不加锁；见 `feature-account-insight.md` |
+| `doctor [--json]` | 体检 | 只读、不加锁；见 `feature-account-insight.md` |
 
 各命令的补充规则：
 
@@ -228,7 +230,7 @@ URL 校验规则：
 - 模式（rename 或 copy）；
 - 阶段；
 - 开始时间；
-- 本次命令的全部参数：名称、`--source`、`--copy`、`--keep-backup`、`--proxy`、`--skip-process-check`。
+- 本次命令的全部参数：名称、`--source`、`--copy`、`--keep-backup`、`--proxy`、`--skip-process-check`、`--accept-relogin`，以及是否需要在完成时提示重新登录（`relogin_needed`，见 `docs/bugfix/fix-keyring-migration.md`）。
 
 此后每完成一步就更新一次记录。
 
@@ -258,6 +260,8 @@ URL 校验规则：
 | 任意 | 与已登记的另一个账号同名（不区分大小写） | 冲突；即使 S 已是指向该账号目录的软链，只要大小写不同，也不输出 already migrated |
 
 此外，预检还要按 §5.1.1 的第 3、4 步，对“登记完成后的新配置”生成完整的动作列表：启动命令、代理、共享链接，都视为账号目录已经就位。只要有冲突，就在移动任何数据之前返回 3。这样可以保证数据移动之后，登记这一步不会再因为冲突卡住。
+
+预检通过后、占用检查之前，再检查凭据存储模式。凭据存在系统钥匙串时（`keyring`，或者 `auto` 且没有 `auth.json`），迁移会丢失登录，因此返回 3；带 `--accept-relogin` 时照常迁移。详见 `docs/bugfix/fix-keyring-migration.md`。
 
 如果环境变量 `CODEX_HOME` 已设置，并且解析后的真实路径与 S 不同，给出警告：直接执行 `codex` 时，实际使用的是 `CODEX_HOME` 指向的目录，而不是迁移源。
 

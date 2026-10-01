@@ -16,9 +16,9 @@ import json
 import os
 import sys
 import time
-from typing import Optional
+from typing import Optional, Tuple
 
-from . import accounts, platform
+from . import accounts, identity, platform
 from .actions import error, info, warn
 from .config import Account, Config, load_config, normalize_proxy
 from .fsutil import (KIND_DIR, KIND_LINK, KIND_MISSING, atomic_write, build_manifest, copy_tree,
@@ -114,10 +114,12 @@ class MigrationStop(Exception):
 
 
 def migrate_default(name: str, source: Optional[str], force_copy: bool, keep_backup: bool,
-                    proxy: Optional[str], skip_process_check: bool, dry_run: bool) -> int:
+                    proxy: Optional[str], skip_process_check: bool, dry_run: bool,
+                    accept_relogin: bool = False) -> int:
     """迁移入口。调用方已持有写锁。
 
     有事务记录时一律按记录续跑，参数以记录为准；名称或 --source 与记录不同返回 2。
+    accept_relogin：凭据存在系统钥匙串时，用户接受迁移后重新登录（见 _check_credentials_store）。
     """
     _enter_step("precheck")
     journal = load_journal()
@@ -139,6 +141,11 @@ def migrate_default(name: str, source: Optional[str], force_copy: bool, keep_bac
         return stop.code
     if done is not None:
         return done
+
+    # 放在占用检查之前：会被拒绝时，用户不必先关掉 Codex。
+    code, relogin_needed = _check_credentials_store(source_path, name, accept_relogin)
+    if code is not None:
+        return code
 
     if not skip_process_check:
         code = _busy_check(source_path)
@@ -168,6 +175,10 @@ def migrate_default(name: str, source: Optional[str], force_copy: bool, keep_bac
         "keep_backup": keep_backup,
         "proxy": normalized_proxy,
         "skip_process_check": skip_process_check,
+        # 回滚后重新开始（_advance 的第 1 行）要按首次的选择重做钥匙串检查；
+        # 中断后续跑要据此在完成时提示重新登录。0.2.0 写的记录没有这两项，读取一律按 False。
+        "accept_relogin": accept_relogin,
+        "relogin_needed": relogin_needed,
     }
     _save_journal(journal)
     _test_hook("journal-planned")
@@ -220,6 +231,37 @@ def _precheck_without_journal(config: Config, config_exists: bool, name: str, so
 
     _check_registration_conflicts(config, config_exists, name, target, proxy)
     return None
+
+
+def _check_credentials_store(source: str, name: str, accept_relogin: bool) -> Tuple[Optional[int], bool]:
+    """凭据存在系统钥匙串时，迁移后会丢登录：钥匙串条目的键由 CODEX_HOME 的真实路径算出
+    （上游 login/src/auth/storage.rs:243-257），迁移改变了真实路径，Codex 再也找不到旧条目。
+
+    返回 (退出码或 None, relogin_needed)。退出码为 None 表示继续迁移；
+    relogin_needed 表示“本来会被拒绝、因为带了 --accept-relogin 才放行”，迁移完成时要提示重新登录。
+    不抛 MigrationStop：调用点在 migrate_default 的 try 之外，cli.main 也不捕获它，抛出会打出 traceback。
+    """
+    store, origin = identity.credentials_store(source)
+    has_auth_file = os.path.lexists(os.path.join(source, "auth.json"))
+    if store == identity.STORE_KEYRING or (store == identity.STORE_AUTO and not has_auth_file):
+        detail = ("credentials are stored in the system keyring (cli_auth_credentials_store = {!r}, from {}); "
+                  "the keyring entry is tied to the directory path, so after migration Codex will be "
+                  "logged out".format(store, origin))
+        if not accept_relogin:
+            error("{}. Rerun with --accept-relogin and log in again with `codex-{} login`, "
+                  "or switch to file storage first".format(detail, name), phase="precheck", path=source)
+            return accounts.EXIT_CONFLICT, False
+        warn("{}; continuing because of --accept-relogin, you will need to log in again".format(detail))
+        return None, True
+    if store == identity.STORE_AUTO:
+        # 当初写钥匙串失败、回落到了文件；迁移后读钥匙串查不到，仍会读到这个文件。
+        warn("cli_auth_credentials_store = 'auto' (from {}): Codex will use {} after migration; "
+             "an older keyring entry, if any, will no longer be found".format(
+                 origin, os.path.join(source, "auth.json")))
+    elif store not in (identity.STORE_FILE, identity.STORE_EPHEMERAL):
+        warn("unrecognized cli_auth_credentials_store = {!r} (from {}); if credentials are in the system "
+             "keyring, you will need to log in again after migration".format(store, origin))
+    return None, False
 
 
 def _check_registration_conflicts(config: Config, config_exists: bool, name: str, target: str,
@@ -348,7 +390,8 @@ def _advance(journal: dict) -> int:
             info("previous rollback finished; starting the migration again")
             return migrate_default(journal["name"], journal["source"], bool(journal.get("copy")) or mode == MODE_COPY,
                                    bool(journal.get("keep_backup")), journal.get("proxy"),
-                                   bool(journal.get("skip_process_check")), False)
+                                   bool(journal.get("skip_process_check")), False,
+                                   accept_relogin=bool(journal.get("accept_relogin")))
 
         # 第 2 行：兼容软链已建好，只剩登记与清理。
         if source_state == "link-target":
@@ -537,6 +580,8 @@ def _step_register_and_cleanup(journal: dict) -> int:
                 warn("could not remove backup {}: {}: {}".format(backup, type(exc).__name__, exc))
     _delete_journal()
     info("migrated {} -> {}".format(journal["source"], journal["target"]))
+    if journal.get("relogin_needed"):
+        info("log in again: codex-{} login".format(journal["name"]))
     return accounts.EXIT_OK
 
 

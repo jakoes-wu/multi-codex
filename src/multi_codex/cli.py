@@ -5,11 +5,13 @@
 """
 
 import argparse
+import json
 import os
 import sys
+import time
 from typing import List, Optional
 
-from . import __version__, accounts, migrate, platform
+from . import __version__, accounts, doctor, identity, launcher, migrate, platform, usage
 from .actions import error, info, warn
 from .config import (DEFAULT_SHARED_ITEMS, Account, Config, ConfigError, is_socks, load_config, normalize_proxy,
                      parse_config, validate_name)
@@ -48,6 +50,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_mig.add_argument("--proxy", help="proxy for the new account: port, URL, off or inherit")
     p_mig.add_argument("--skip-process-check", action="store_true",
                        help="do not check whether Codex is using the source directory")
+    p_mig.add_argument("--accept-relogin", action="store_true",
+                       help="migrate even though credentials are in the system keyring; "
+                            "you will need to log in again afterwards")
     _add_dry_run(p_mig)
 
     p_add = sub.add_parser("add", help="add an account, adopt an existing directory, or change its options")
@@ -76,8 +81,36 @@ def build_parser() -> argparse.ArgumentParser:
     p_apply.add_argument("-f", "--file", help="use this file as the new configuration")
     _add_dry_run(p_apply)
 
-    sub.add_parser("list", help="show accounts and their status")
+    p_list = sub.add_parser("list", help="show accounts, their status and who is logged in")
+    _add_json(p_list)
+
+    p_usage = sub.add_parser("usage", help="show rate-limit usage of accounts")
+    p_usage.add_argument("names", nargs="*", metavar="NAME", help="accounts to show (default: all)")
+    p_usage.add_argument("--live", action="store_true",
+                         help="ask Codex (codex app-server, through the account's launcher) for live usage "
+                              "instead of reading the last snapshot from local session logs")
+    p_usage.add_argument("--timeout", type=_positive_seconds, default=usage.DEFAULT_LIVE_TIMEOUT_SEC,
+                         help="total time limit per account for --live, in seconds (default 30)")
+    _add_json(p_usage)
+
+    p_doctor = sub.add_parser("doctor", help="check the installation, configuration and accounts (read-only)")
+    _add_json(p_doctor)
     return parser
+
+
+def _add_json(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--json", action="store_true",
+                        help="print one JSON object on stdout; warnings still go to stderr")
+
+
+def _positive_seconds(value: str) -> float:
+    try:
+        seconds = float(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError("must be a number of seconds")
+    if not seconds > 0 or seconds == float("inf"):
+        raise argparse.ArgumentTypeError("must be greater than 0")
+    return seconds
 
 
 def _add_dry_run(parser: argparse.ArgumentParser) -> None:
@@ -97,11 +130,16 @@ def main(argv: Optional[List[str]] = None) -> int:
         return accounts.EXIT_ERROR
 
     try:
+        # 只读命令，与迁移无关：放在读取事务记录之前分派，记录损坏时 doctor 才能把它报出来。
+        if args.command == "usage":
+            return cmd_usage(args)
+        if args.command == "doctor":
+            return cmd_doctor(args)
         notice = migrate.pending_journal_notice()
         if notice:
             warn(notice)
         if args.command == "list":
-            return cmd_list()
+            return cmd_list(args.json)
         if _blocked_by_migration(args, notice):
             return accounts.EXIT_ERROR
         with WriteLock():
@@ -142,7 +180,8 @@ def dispatch(args: argparse.Namespace) -> int:
         name = _checked_name(args.name)
         proxy = _checked_proxy(args.proxy) if args.proxy is not None else None
         return migrate.migrate_default(name, args.source, args.copy, args.keep_backup, proxy,
-                                       args.skip_process_check, args.dry_run)
+                                       args.skip_process_check, args.dry_run,
+                                       accept_relogin=args.accept_relogin)
 
     old, exists = load_config()
     new = old.copy()
@@ -244,28 +283,130 @@ def _warn_if_socks(proxy: str, account: Optional[str] = None) -> None:
          "works if {} also accepts HTTP proxy requests (a \"mixed\" port); prefer an HTTP proxy".format(where, proxy))
 
 
-def cmd_list() -> int:
+def _print_json(data: dict) -> None:
+    print(json.dumps(data, indent=2, ensure_ascii=False))
+
+
+def cmd_list(as_json: bool = False) -> int:
     config, exists = load_config()
     migrate.warn_isolation_env()
     if not exists:
-        info("no configuration yet at {}; run `multi-codex add NAME` to start".format(
-            os.path.join(platform.state_dir(), "config.json")))
+        if as_json:
+            _print_json({"version": 1, "configured": False, "accounts": [], "duplicates": []})
+        else:
+            info("no configuration yet at {}; run `multi-codex add NAME` to start".format(
+                os.path.join(platform.state_dir(), "config.json")))
         return accounts.EXIT_OK
+    entries = []
+    for name, account in config.accounts.items():
+        directory = accounts.account_dir(config, name)
+        is_dir = os.path.isdir(directory)
+        # 目录不存在时 read_identity 只会得到“未登录”，这里直接按未登录显示，不去读不存在的文件。
+        found = identity.read_identity(directory) if is_dir else None
+        entries.append((name, account, directory, is_dir, found))
+    duplicates = identity.duplicate_groups((name, found) for name, _, _, _, found in entries if found)
+
+    if as_json:
+        _print_json({
+            "version": 1,
+            "configured": True,
+            "root": expand(config.root),
+            "bin_dir": expand(config.bin_dir),
+            "shared_dir": expand(config.shared_dir) if config.shared_dir else None,
+            "accounts": [{
+                "name": name,
+                "dir": directory,
+                "dir_status": "ok" if is_dir else "missing-dir",
+                "proxy": account.proxy,
+                "shared": account.shared,
+                "launcher": accounts.launcher_status(config, name),
+                "credentials_store": found.store if found else None,
+                "login": {"type": found.login if found else identity.LOGIN_LOGGED_OUT,
+                          "email": found.email if found else None,
+                          "plan": found.plan if found else None},
+            } for name, account, directory, is_dir, found in entries],
+            "duplicates": duplicates,
+        })
+        _warn_duplicates(duplicates, entries)
+        return accounts.EXIT_OK
+
     print("root: {}".format(expand(config.root)))
     print("bin_dir: {}".format(expand(config.bin_dir)))
     print("shared.dir: {}".format(expand(config.shared_dir) if config.shared_dir else "(not set)"))
     if not config.accounts:
         print("no accounts registered")
         return accounts.EXIT_OK
-    rows = [("NAME", "DIR", "PROXY", "SHARED", "LAUNCHER")]
-    for name, account in config.accounts.items():
-        directory = accounts.account_dir(config, name)
-        rows.append((name, "ok" if os.path.isdir(directory) else "missing-dir", account.proxy,
-                     "yes" if account.shared else "no", accounts.launcher_status(config, name)))
+    # 前 5 列与 0.2.0 相同，新列只追加在后面，按列位置解析旧输出的脚本不受影响。
+    rows = [("NAME", "DIR", "PROXY", "SHARED", "LAUNCHER", "LOGIN", "PLAN")]
+    for name, account, directory, is_dir, found in entries:
+        rows.append((name, "ok" if is_dir else "missing-dir", account.proxy,
+                     "yes" if account.shared else "no", accounts.launcher_status(config, name),
+                     identity.display_login(found) if found else "-",
+                     (found.plan if found and found.plan else "-")))
     widths = [max(len(row[index]) for row in rows) for index in range(len(rows[0]))]
     for row in rows:
         print("  ".join(cell.ljust(width) for cell, width in zip(row, widths)).rstrip())
+    _warn_duplicates(duplicates, entries)
     return accounts.EXIT_OK
+
+
+def _warn_duplicates(duplicates: List[List[str]], entries) -> None:
+    emails = {name: found.email for name, _, _, _, found in entries if found}
+    for group in duplicates:
+        warn("accounts {} are logged in as the same ChatGPT account ({}); they share one usage quota".format(
+            ", ".join(group), emails.get(group[0]) or "same user and workspace"))
+
+
+def cmd_usage(args: argparse.Namespace) -> int:
+    """额度。只读、不加锁；一个账号失败不影响其它账号，最后以退出码 1 汇总。"""
+    config, exists = load_config()
+    if not exists or not config.accounts:
+        if args.json:
+            _print_json({"version": 1, "accounts": []})
+        else:
+            print("no accounts registered")
+        return accounts.EXIT_OK
+    targets = []
+    for name in args.names or list(config.accounts):
+        account = config.find(name)
+        targets.append((name, account))
+
+    results = []
+    for name, account in targets:
+        if account is None:
+            result = usage.UsageResult(name, usage.SOURCE_LIVE if args.live else usage.SOURCE_LOCAL, False,
+                                       "account is not registered", None, False, [])
+        elif args.live:
+            status = accounts.launcher_status(config, account.name)
+            if status != "ok":
+                result = usage.UsageResult(account.name, usage.SOURCE_LIVE, False,
+                                           "launcher is {}; run `multi-codex apply` first".format(status),
+                                           None, False, [])
+            else:
+                result = usage.live_snapshot(account.name, launcher.launcher_path(expand(config.bin_dir),
+                                                                                  account.name), args.timeout)
+        else:
+            result = usage.local_snapshot(account.name, accounts.account_dir(config, account.name))
+        results.append(result)
+        if not args.json:
+            # 实时查询每个账号要几秒，逐个输出，不等全部完成。
+            for line in usage.format_result(result, time.time()):
+                print(line)
+            sys.stdout.flush()
+    if args.json:
+        _print_json({"version": 1, "accounts": [usage.to_json(result) for result in results]})
+    return accounts.EXIT_OK if all(result.ok for result in results) else accounts.EXIT_ERROR
+
+
+def cmd_doctor(args: argparse.Namespace) -> int:
+    """体检。只读、不加锁；有任一 fail 时退出码为 1，只有 warn 时仍为 0。"""
+    checks = doctor.run_checks()
+    if args.json:
+        _print_json(doctor.to_json(checks))
+    else:
+        for line in doctor.format_checks(checks):
+            print(line)
+    return accounts.EXIT_ERROR if any(check.status == doctor.FAIL for check in checks) else accounts.EXIT_OK
 
 
 if __name__ == "__main__":
