@@ -163,7 +163,7 @@ Codex CLI 通过环境变量 `CODEX_HOME` 决定配置、凭据、会话数据�
 | ---- | ---- | ---- |
 | `init [--root] [--bin-dir] [--shared-dir] [--shared-items]` | 创建或修改全局配置 | 参数相同时输出 unchanged |
 | `migrate-default <名称> [--source] [--copy] [--keep-backup] [--proxy] [--skip-process-check]` | 把默认目录迁移成账号 | 已完成时输出 already migrated；上次中断时从中断处继续 |
-| `add <名称> [--proxy P] [--shared \| --no-shared]` | 新增账号、登记已有目录，或修改账号选项 | 与现状相同时输出 unchanged |
+| `add <名称> [--proxy P] [--shared \| --no-shared] [--adopt]` | 新增账号、登记已有目录，或修改账号选项；`--adopt` 见 `feature-adopt-links.md` | 与现状相同时输出 unchanged |
 | `proxy <名称> <端口 \| URL \| off \| inherit>` | 设置代理并重新生成启动命令 | 值相同时输出 unchanged |
 | `remove <名称>` | 注销账号，删除受管启动命令和本工具建立的共享链接；账号目录保留 | 账号不存在时输出 not registered，同时清理该名字的孤儿启动命令，返回 0 |
 | `apply [-f 文件]` | 带 `-f` 时，以该文件为新配置，否则以当前 `config.json` 为新配置；按 §5.1.1 的顺序执行，收敛全部账号并清理孤儿启动命令 | 已收敛时全部输出 unchanged |
@@ -360,7 +360,7 @@ URL 校验规则：
 | 账号里该条目的状态 | 处理 |
 | ---- | ---- |
 | 不存在 | 创建软链，把名字加入 `managed_links` |
-| 已是指向该共享条目的软链 | 记为 `unchanged`；如果不是本工具建立的，不加入 `managed_links` |
+| 已是指向该共享条目的软链 | 记为 `unchanged`；如果不是本工具建立的，不加入 `managed_links`。带 `--adopt` 时改为接管：加入 `managed_links`，链接不动（`feature-adopt-links.md`） |
 | 指向别处的软链、真实文件或真实目录 | 冲突 |
 
 判断“是否指向该共享条目”时，两边都先用 `os.path.realpath` 解析成真实路径再比较，不按字符串比较。

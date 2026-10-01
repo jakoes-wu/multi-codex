@@ -6,6 +6,11 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- `add --adopt`: take over existing links that already point to the shared
+  items, so that turning sharing off later removes them too.
+
 ## [0.1.0] - 2026-09-29
 
 First release (macOS and Linux).

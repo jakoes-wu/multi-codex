@@ -58,6 +58,9 @@ def build_parser() -> argparse.ArgumentParser:
                               help="link shared items into this account")
     shared_group.add_argument("--no-shared", dest="shared", action="store_false",
                               help="do not link shared items (default for new accounts)")
+    p_add.add_argument("--adopt", action="store_true",
+                       help="take over existing links that already point to the shared items, "
+                            "so that turning sharing off later removes them too")
     _add_dry_run(p_add)
 
     p_proxy = sub.add_parser("proxy", help="set the proxy of an account")
@@ -144,6 +147,7 @@ def dispatch(args: argparse.Namespace) -> int:
     old, exists = load_config()
     new = old.copy()
     orphan_scope = accounts.NO_ORPHANS
+    adopt_accounts = frozenset()
 
     if args.command == "init":
         if args.root:
@@ -167,6 +171,11 @@ def dispatch(args: argparse.Namespace) -> int:
             account.proxy = _checked_proxy(args.proxy)
         if args.shared is not None:
             account.shared = args.shared
+        if args.adopt:
+            # 接管只对开启了共享的账号有意义；关闭状态下工具本来就不管这些软链。
+            if not account.shared:
+                raise UsageError("--adopt requires sharing to be on for {!r}; add --shared".format(account.name))
+            adopt_accounts = frozenset([account.name.casefold()])
     elif args.command == "proxy":
         account = new.find(_checked_name(args.name))
         if account is None:
@@ -187,7 +196,7 @@ def dispatch(args: argparse.Namespace) -> int:
             new = _load_apply_file(args.file, old)
 
     return accounts.converge(old, new, config_exists=exists, dry_run=args.dry_run,
-                             orphan_scope=orphan_scope)
+                             orphan_scope=orphan_scope, adopt_accounts=adopt_accounts)
 
 
 def _load_apply_file(path: str, old: Config) -> Config:

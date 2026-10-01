@@ -71,7 +71,7 @@ multi-codex list
 | ---- | ---- |
 | `multi-codex init [--root DIR] [--bin-dir DIR] [--shared-dir DIR] [--shared-items A,B]` | Create or change global settings. |
 | `multi-codex migrate-default NAME [--source DIR] [--copy] [--keep-backup] [--proxy P] [--skip-process-check]` | Turn the default directory into an account. |
-| `multi-codex add NAME [--proxy P] [--shared \| --no-shared]` | Add an account, adopt an existing directory, or change its options. |
+| `multi-codex add NAME [--proxy P] [--shared \| --no-shared] [--adopt]` | Add an account, adopt an existing directory, or change its options. |
 | `multi-codex proxy NAME PORT\|URL\|off\|inherit` | Set an account's proxy. |
 | `multi-codex remove NAME` | Unregister an account and delete its launcher. **The account directory is kept.** |
 | `multi-codex apply [-f FILE]` | Converge everything to the configuration (or to `FILE`). |
@@ -163,6 +163,8 @@ multi-codex add work --shared
 ```
 
 multi-codex creates the missing links and remembers which links it created. Turning sharing off removes only those links; links you made yourself are left alone. A real file or directory at a link location is a conflict and is never overwritten.
+
+If you already linked an account to the shared directory by hand, `multi-codex add NAME --shared --adopt` takes those links over without recreating them: from then on, turning sharing off removes them as well. Only links that already point to the matching shared item are adopted.
 
 ## Exit codes
 

@@ -73,7 +73,7 @@ multi-codex list
 | ---- | ---- |
 | `multi-codex init [--root DIR] [--bin-dir DIR] [--shared-dir DIR] [--shared-items A,B]` | 创建或修改全局设置 |
 | `multi-codex migrate-default 名称 [--source DIR] [--copy] [--keep-backup] [--proxy P] [--skip-process-check]` | 把默认目录迁移成账号 |
-| `multi-codex add 名称 [--proxy P] [--shared \| --no-shared]` | 新增账号、登记已有目录，或修改账号选项 |
+| `multi-codex add 名称 [--proxy P] [--shared \| --no-shared] [--adopt]` | 新增账号、登记已有目录，或修改账号选项 |
 | `multi-codex proxy 名称 端口\|URL\|off\|inherit` | 设置账号的代理 |
 | `multi-codex remove 名称` | 注销账号，删除它的启动命令。**账号目录会保留** |
 | `multi-codex apply [-f 文件]` | 按配置（或指定文件）收敛全部账号 |
@@ -184,6 +184,7 @@ multi-codex add work --shared
 
 - multi-codex 只创建缺少的链接，并记住哪些链接是它自己建的。
 - 关闭共享时，只删除它建的那些链接，你自己建的链接不受影响。
+- 如果你以前手工把某个账号软链到了共享目录，可以用 `multi-codex add 名称 --shared --adopt` 让工具接管这些链接：链接本身不重建，但之后关闭共享时也会被删除。只接管已经指向对应共享条目的链接。
 - 链接位置上如果已经是真实的文件或目录，视为冲突，绝不覆盖。
 
 ## 退出码
