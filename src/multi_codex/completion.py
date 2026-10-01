@@ -13,7 +13,8 @@ import argparse
 from typing import Dict, List, Tuple
 
 # 第一个位置参数是账号名的子命令；usage 的每个位置参数都是账号名。
-ACCOUNT_COMMANDS = ("add", "proxy", "remove", "migrate-default", "run", "path", "env", "usage", "use", "restore")
+ACCOUNT_COMMANDS = ("add", "proxy", "remove", "migrate-default", "run", "path", "env", "usage", "use", "restore",
+                    "bind", "code", "app")
 MULTI_ACCOUNT_COMMANDS = ("usage",)
 SHELLS = ("bash", "zsh", "fish")
 
@@ -164,6 +165,11 @@ def zsh_script(spec: Dict[str, Tuple[List[str], List[str]]]) -> str:
         "        fi",
         '        [[ "$cmd" == proxy ]] && (( npos == 1 )) && candidates=(off inherit)',
         '        [[ "$cmd" == completion ]] && (( npos == 0 )) && candidates=({})'.format(" ".join(SHELLS)),
+        "    fi",
+        "    # 没有候选时（bind 的目录、code 的路径等）退回文件名补全，与 bash 的 -o default 一致。",
+        "    if (( ${#candidates} == 0 )); then",
+        "        _files",
+        "        return",
         "    fi",
         '    compadd -- "${candidates[@]}"',
         "}",

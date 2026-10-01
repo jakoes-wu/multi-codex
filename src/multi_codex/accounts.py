@@ -12,13 +12,13 @@
 """
 
 import os
-from typing import Dict, FrozenSet, Iterable, List, Optional, Set, Union
+from typing import Dict, FrozenSet, Iterable, List, Optional, Sequence, Set, Union
 
 from . import launcher, shared
 from .actions import (CONFLICT, CREATE, DELETE, SKIP, UNCHANGED, UPDATE, Action, error,
                       has_conflict, info, print_action)
-from .config import Config, config_path, dump_config, save_config
-from .fsutil import KIND_DIR, KIND_MISSING, atomic_write, entry_kind, expand
+from .config import Account, Config, config_path, dump_config, save_config
+from .fsutil import KIND_DIR, KIND_MISSING, atomic_write, entry_kind, expand, read_text
 
 EXIT_OK = 0
 EXIT_ERROR = 1
@@ -37,7 +37,8 @@ def account_dir(config: Config, name: str) -> str:
 
 def plan(old: Config, new: Config, *, config_exists: bool = True,
          orphan_scope: Union[str, FrozenSet[str]] = NO_ORPHANS,
-         assume_dirs: Iterable[str] = (), adopt_accounts: FrozenSet[str] = frozenset()) -> List[Action]:
+         assume_dirs: Iterable[str] = (), adopt_accounts: FrozenSet[str] = frozenset(),
+         extra_actions: Sequence[Action] = ()) -> List[Action]:
     """生成从 old 收敛到 new 所需的全部动作。只读文件系统，不做任何修改。
 
     orphan_scope：要清理的孤儿启动命令的账号名集合（casefold 后比较）；ALL_ORPHANS 表示全部清理，
@@ -45,6 +46,8 @@ def plan(old: Config, new: Config, *, config_exists: bool = True,
     assume_dirs：视为已存在的账号目录。迁移在移动数据前做预检时，目标目录还不存在，
     但迁移完成后它一定存在，不应计划“创建目录”。
     adopt_accounts：要接管已有共享软链的账号名集合（casefold 后比较），只有 `add --adopt` 会传入。
+    extra_actions：一次性的附加动作（目前只有 `add --config-from` 的复制），追加在最后，
+    所以总在账号目录创建之后执行，并且与其它动作一起参与“有冲突就什么都不写”的判断。
     """
     actions: List[Action] = []
     assumed = {expand(path) for path in assume_dirs}
@@ -94,7 +97,7 @@ def plan(old: Config, new: Config, *, config_exists: bool = True,
     config_changed = not config_exists or dump_config(old) != dump_config(new)
     config_action = Action(CREATE if not config_exists else (UPDATE if config_changed else UNCHANGED),
                            "config", config_path())
-    return [config_action] + actions
+    return [config_action] + actions + list(extra_actions)
 
 
 def _plan_account_dir(directory: str, assumed: Set[str]) -> List[Action]:
@@ -107,6 +110,31 @@ def _plan_account_dir(directory: str, assumed: Set[str]) -> List[Action]:
     if kind == KIND_DIR or os.path.isdir(directory):
         return [Action(UNCHANGED, "account-dir", directory)]
     return [Action(CONFLICT, "account-dir", directory, "exists but is not a directory")]
+
+
+def plan_config_copy(config: Config, account: Account, content: str, source_name: str) -> List[Action]:
+    """`add --config-from`：把另一个账号的 config.toml 内容复制到本账号，只复制一次。
+
+    config / account 是应用了本条命令其它选项（如 --shared）之后的新配置。判断顺序见
+    feature-config-copy §5.1：共享检查最先，因为共享的 config.toml 应当是软链，
+    atomic_write 的 os.replace 会把软链换成普通文件，之后 apply 就会判冲突。
+    已有不同内容时不覆盖：那可能是用户已经改过的配置。
+    """
+    target = os.path.join(account_dir(config, account.name), "config.toml")
+    if account.shared and "config.toml" in config.shared_items:
+        return [Action(CONFLICT, "config-file", target,
+                       "config.toml is shared for this account and does not need copying")]
+    kind = entry_kind(target)
+    if kind == KIND_MISSING:
+        def run() -> None:
+            # 配置里可能有 experimental_bearer_token 之类的密钥，只允许本人读写。
+            atomic_write(target, content, mode=0o600)
+        return [Action(CREATE, "config-file", target, "copied from {}".format(source_name), run)]
+    if not os.path.isfile(target):
+        return [Action(CONFLICT, "config-file", target, "exists but is not a file")]
+    if read_text(target) == content:
+        return [Action(UNCHANGED, "config-file", target)]
+    return [Action(CONFLICT, "config-file", target, "already exists with different content")]
 
 
 def _make_private_dir(directory: str) -> None:
@@ -185,9 +213,9 @@ def execute(old: Config, new: Config, actions: List[Action], *, dry_run: bool) -
 
 def converge(old: Config, new: Config, *, config_exists: bool, dry_run: bool,
              orphan_scope: Union[str, FrozenSet[str]] = NO_ORPHANS, assume_dirs: Iterable[str] = (),
-             adopt_accounts: FrozenSet[str] = frozenset()) -> int:
+             adopt_accounts: FrozenSet[str] = frozenset(), extra_actions: Sequence[Action] = ()) -> int:
     actions = plan(old, new, config_exists=config_exists, orphan_scope=orphan_scope,
-                   assume_dirs=assume_dirs, adopt_accounts=adopt_accounts)
+                   assume_dirs=assume_dirs, adopt_accounts=adopt_accounts, extra_actions=extra_actions)
     return execute(old, new, actions, dry_run=dry_run)
 
 

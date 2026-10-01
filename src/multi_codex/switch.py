@@ -19,7 +19,7 @@ import json
 import os
 from typing import Optional, Tuple
 
-from . import accounts, launcher, migrate, platform
+from . import accounts, binding, launcher, migrate, platform
 from .actions import error, info, warn
 from .config import Config
 from .fsutil import KIND_DIR, KIND_LINK, KIND_MISSING, atomic_write, entry_kind, expand
@@ -270,6 +270,7 @@ def restore_account(config: Config, config_exists: bool, name: str, skip_process
     current = new.find(canonical)
     if current is not None:
         del new.accounts[current.name]
+    binding.drop_account(new, canonical)
     code = accounts.converge(config, new, config_exists=config_exists, dry_run=False,
                              orphan_scope=frozenset([canonical.casefold()]))
     if code != accounts.EXIT_OK:

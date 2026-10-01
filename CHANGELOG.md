@@ -6,6 +6,23 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- `bind NAME [DIR]` / `unbind [DIR]`: bind a directory to an account;
+  `run` without an account name uses the nearest bound directory.
+- `add NAME --config-from OTHER`: copy `config.toml` from another account once.
+- `code NAME [PATH]` and `app NAME` (macOS): open VS Code or the Codex desktop
+  app for an account. Experimental.
+- Releases publish `multi-codex-<tag>.tar.gz` and `SHA256SUMS`; `install.sh`
+  verifies the download (`MULTI_CODEX_SHA256`, `MULTI_CODEX_REQUIRE_CHECKSUM`).
+- `doctor` reports stale directory bindings.
+
+### Changed
+
+- `install.sh` stops when reading the release of an explicit version tag
+  (`MULTI_CODEX_REF=vX.Y.Z`) fails, instead of installing it unverified.
+- zsh completion falls back to file names where no other candidates apply.
+
 ## [0.4.0] - 2026-10-01
 
 ### Added

@@ -7,12 +7,14 @@
 import argparse
 import json
 import os
+import subprocess
 import sys
 import time
 from typing import List, Optional, Tuple
 
-from . import __version__, accounts, completion, doctor, identity, launcher, migrate, platform, switch, usage
-from .actions import error, info, warn
+from . import (__version__, accounts, apps, binding, completion, doctor, identity, launcher, migrate, platform,
+               switch, usage)
+from .actions import CREATE, DELETE, UNCHANGED, UPDATE, Action, error, info, print_action, warn
 from .config import (DEFAULT_SHARED_ITEMS, Account, Config, ConfigError, is_socks, load_config, normalize_proxy,
                      parse_config, validate_env_key, validate_env_value, validate_name)
 from .fsutil import expand
@@ -63,6 +65,8 @@ def build_parser() -> argparse.ArgumentParser:
                               help="link shared items into this account")
     shared_group.add_argument("--no-shared", dest="shared", action="store_false",
                               help="do not link shared items (default for new accounts)")
+    p_add.add_argument("--config-from", metavar="OTHER",
+                       help="copy config.toml from account OTHER (once; existing different content is a conflict)")
     p_add.add_argument("--adopt", action="store_true",
                        help="take over existing links that already point to the shared items, "
                             "so that turning sharing off later removes them too")
@@ -102,8 +106,28 @@ def build_parser() -> argparse.ArgumentParser:
     p_comp.add_argument("--list-accounts", action="store_true", help=argparse.SUPPRESS)
 
     p_run = sub.add_parser("run", help="run a command with an account's environment (default: codex)",
-                           usage="multi-codex run NAME [-- COMMAND [ARG ...]]")
-    p_run.add_argument("name")
+                           usage="multi-codex run [NAME] [-- COMMAND [ARG ...]]")
+    # 省略 NAME 时按当前目录的绑定选账号（bind）。
+    p_run.add_argument("name", nargs="?")
+
+    p_bind = sub.add_parser("bind", help="bind a directory to an account (no arguments: list bindings)")
+    p_bind.add_argument("name", nargs="?")
+    p_bind.add_argument("dir", nargs="?", help="directory to bind (default: current directory)")
+    _add_dry_run(p_bind)
+
+    p_unbind = sub.add_parser("unbind", help="remove the binding of a directory")
+    p_unbind.add_argument("dir", nargs="?", help="directory to unbind (default: current directory)")
+    _add_dry_run(p_unbind)
+
+    p_code = sub.add_parser("code", help="open VS Code for an account (experimental)",
+                            usage="multi-codex code NAME [PATH] [--bin CODE] [-- CODE_ARGS ...]")
+    p_code.add_argument("name")
+    p_code.add_argument("path", nargs="?")
+    p_code.add_argument("--bin", help="path of the VS Code `code` command (default: `code` on PATH)")
+
+    p_app = sub.add_parser("app", help="open the Codex desktop app for an account (macOS, experimental)")
+    p_app.add_argument("name")
+    p_app.add_argument("--app", help="path of the Codex desktop app (default {})".format(apps.DEFAULT_DESKTOP_APP))
 
     p_path = sub.add_parser("path", help="print an account's directory")
     p_path.add_argument("name")
@@ -157,7 +181,7 @@ def _split_run_command(argv: List[str]) -> Tuple[List[str], List[str]]:
     不交给 argparse 的 REMAINDER：不同 Python 版本对 `--` 的处理不一致（3.9 起会吞掉第一个 `--`），
     `run a -- -- x` 这种命令就会被解析成不同的样子。
     """
-    if argv[:1] == ["run"] and "--" in argv:
+    if argv[:1] in (["run"], ["code"]) and "--" in argv:
         index = argv.index("--")
         return argv[:index], argv[index + 1:]
     return argv, []
@@ -186,6 +210,10 @@ def main(argv: Optional[List[str]] = None) -> int:
             return cmd_completion(args, parser)
         if args.command == "run":
             return cmd_run(args.name, run_command)
+        if args.command == "code":
+            return cmd_code(args, run_command)
+        if args.command == "app":
+            return cmd_app(args)
         if args.command == "path":
             return cmd_path(args.name)
         notice = migrate.pending_journal_notice()
@@ -201,6 +229,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             return cmd_env_list(args.name)
         if args.command == "use" and args.name is None:
             return cmd_use_show()
+        if args.command == "bind" and args.name is None:
+            return cmd_bind_list()
         if _blocked_by_migration(args, notice):
             return accounts.EXIT_ERROR
         with WriteLock():
@@ -259,6 +289,10 @@ def dispatch(args: argparse.Namespace) -> int:
     new = old.copy()
     orphan_scope = accounts.NO_ORPHANS
     adopt_accounts = frozenset()
+    extra_actions: List = []
+    # bind / unbind 的变化行：不放进 plan（execute 把第一项当配置动作，doctor 也调用 plan），
+    # 等 converge 成功后再打印，避免冲突时用户看到 create 却什么都没写。
+    binding_change: Optional[Action] = None
 
     if args.command == "init":
         if args.root:
@@ -287,6 +321,10 @@ def dispatch(args: argparse.Namespace) -> int:
             if not account.shared:
                 raise UsageError("--adopt requires sharing to be on for {!r}; add --shared".format(account.name))
             adopt_accounts = frozenset([account.name.casefold()])
+        if args.config_from:
+            extra_actions = _config_copy_actions(new, account, args.config_from)
+            if extra_actions is None:
+                return accounts.EXIT_ERROR
     elif args.command == "proxy":
         account = new.find(_checked_name(args.name))
         if account is None:
@@ -300,6 +338,7 @@ def dispatch(args: argparse.Namespace) -> int:
             info("{} is not registered".format(name))
         else:
             del new.accounts[account.name]
+            binding.drop_account(new, account.name)
         orphan_scope = frozenset([name.casefold()])
     elif args.command == "apply":
         orphan_scope = accounts.ALL_ORPHANS
@@ -312,14 +351,67 @@ def dispatch(args: argparse.Namespace) -> int:
             error("account {!r} is not registered".format(name))
             return accounts.EXIT_ERROR
         _apply_env_changes(account, args)
+    elif args.command == "bind":
+        account = new.find(_checked_name(args.name))
+        if account is None:
+            error("account {!r} is not registered".format(args.name))
+            return accounts.EXIT_ERROR
+        target = args.dir or os.getcwd()
+        if not os.path.isdir(target):
+            error("not a directory: {}".format(target))
+            return accounts.EXIT_ERROR
+        key = binding.normalize_dir(target)
+        previous = new.bindings.get(key)
+        new.bindings[key] = account.name
+        status = UNCHANGED if previous == account.name else (UPDATE if previous else CREATE)
+        binding_change = Action(status, "binding", key, "-> " + account.name)
+    elif args.command == "unbind":
+        target = args.dir or os.getcwd()
+        key = binding.normalize_dir(target)
+        if not exists or key not in new.bindings:
+            info("not bound: {}".format(key))
+            effective = binding.resolve(new, target) if exists else None
+            if effective is not None:
+                info("the effective binding is {} -> {}".format(*effective))
+            return accounts.EXIT_OK
+        binding_change = Action(DELETE, "binding", key, "-> " + new.bindings.pop(key))
     elif args.command == "use":
         return switch.use_account(old, _checked_name(args.name), args.skip_process_check, args.dry_run)
     elif args.command == "restore":
         return switch.restore_account(old, exists, _checked_name(args.name), args.skip_process_check,
                                       args.accept_relogin, args.dry_run)
 
-    return accounts.converge(old, new, config_exists=exists, dry_run=args.dry_run,
-                             orphan_scope=orphan_scope, adopt_accounts=adopt_accounts)
+    code = accounts.converge(old, new, config_exists=exists, dry_run=args.dry_run,
+                             orphan_scope=orphan_scope, adopt_accounts=adopt_accounts, extra_actions=extra_actions)
+    if binding_change is not None:
+        if code == accounts.EXIT_OK:
+            print_action(binding_change, dry_run=args.dry_run)
+        else:
+            info("binding not changed because of the errors above")
+    return code
+
+
+def _config_copy_actions(new: Config, account: Account, other_name: str) -> Optional[List]:
+    """校验 --config-from 并生成复制动作；校验失败时输出原因并返回 None（退出码 1），参数错误抛 UsageError。"""
+    other = new.find(_checked_name(other_name))
+    if other is None:
+        error("account {!r} is not registered".format(other_name))
+        return None
+    if other.name.casefold() == account.name.casefold():
+        raise UsageError("--config-from must name another account")
+    source = os.path.join(accounts.account_dir(new, other.name), "config.toml")
+    if not os.path.isfile(source):
+        error("account {!r} has no config.toml".format(other.name), path=source)
+        return None
+    with open(source, "rb") as handle:
+        raw = handle.read()
+    try:
+        # TOML 规定必须是 UTF-8；不是的话 Codex 自己也读不了，复制没有意义。
+        content = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        error("config.toml of {!r} is not valid UTF-8".format(other.name), path=source)
+        return None
+    return accounts.plan_config_copy(new, account, content, other.name)
 
 
 def _apply_env_changes(account: Account, args: argparse.Namespace) -> None:
@@ -364,6 +456,11 @@ def _load_apply_file(path: str, old: Config) -> Config:
         _warn_if_socks(account.proxy, account.name)
         current = old.find(account.name)
         account.managed_links = list(current.managed_links) if current else []
+    # 绑定是本机状态，沿用当前值；文件中已删除的账号，它的绑定一并删除。
+    new.bindings = dict(old.bindings)
+    for name in set(new.bindings.values()):
+        if new.find(name) is None:
+            binding.drop_account(new, name)
     return new
 
 
@@ -543,26 +640,136 @@ def cmd_completion(args: argparse.Namespace, parser: argparse.ArgumentParser) ->
     return accounts.EXIT_OK
 
 
-def cmd_run(name: str, command: List[str]) -> int:
-    """在账号的环境下运行命令（默认 codex），成功时不返回：本进程被替换成 sh，再被替换成该命令。
+def _account_exec_args(config: Config, account: Account, command: List[str]) -> Tuple[List[str], dict]:
+    """返回在账号环境下运行 command 所需的 (argv, env)，交给 os.execve("/bin/sh", ...)；run 与 code 共用。
 
     环境由 launcher.render 生成的脚本设置，与启动命令逐字一致。脚本经环境变量交给 sh，
     不放进命令行参数：里面可能有账号环境变量里的密钥，命令行参数其它用户用 ps 就能看到。
     """
-    config, exists = load_config()
-    account = config.find(name) if exists else None
-    if account is None:
-        error("account {!r} is not registered".format(name))
-        return accounts.EXIT_ERROR
     script = launcher.render(account.name, accounts.account_dir(config, account.name), account.proxy,
                              account.env, command_mode=True)
     env = dict(os.environ)
     env[launcher.RUN_SCRIPT_ENV] = script
+    return ["sh", "-c", 'eval "${}"'.format(launcher.RUN_SCRIPT_ENV), "sh"] + command, env
+
+
+def cmd_run(name: Optional[str], command: List[str]) -> int:
+    """在账号的环境下运行命令（默认 codex），成功时不返回：本进程被替换成 sh，再被替换成该命令。
+
+    省略 name 时，从当前目录向上找最近一个绑定（feature-dir-binding §5.1.2）。
+    """
+    config, exists = load_config()
+    if name is None:
+        found = binding.resolve(config, os.getcwd()) if exists else None
+        if found is None:
+            error("no account is bound to {} or its parents; use `multi-codex run NAME` or "
+                  "`multi-codex bind NAME`".format(os.getcwd()))
+            return accounts.EXIT_ERROR
+        bound_dir, name = found
+        if config.find(name) is None:
+            error("account {!r} bound to {} is not registered; run `multi-codex unbind {}`".format(
+                name, bound_dir, bound_dir))
+            return accounts.EXIT_ERROR
+        print("[multi-codex] using account {} (bound to {})".format(name, bound_dir), file=sys.stderr)
+    account = config.find(name) if exists else None
+    if account is None:
+        error("account {!r} is not registered".format(name))
+        return accounts.EXIT_ERROR
+    argv, env = _account_exec_args(config, account, command or ["codex"])
     sys.stdout.flush()
     sys.stderr.flush()
-    os.execve("/bin/sh", ["sh", "-c", 'eval "${}"'.format(launcher.RUN_SCRIPT_ENV), "sh"] + (command or ["codex"]),
-              env)
+    os.execve("/bin/sh", argv, env)
     return accounts.EXIT_ERROR  # 不会执行到这里；execve 失败时抛 OSError，由 main 统一处理
+
+
+def _registered_with_dir(name: str) -> Tuple[Optional[Config], Optional[Account]]:
+    config, exists = load_config()
+    account = config.find(name) if exists else None
+    if account is None:
+        error("account {!r} is not registered".format(name))
+        return None, None
+    directory = accounts.account_dir(config, account.name)
+    if not os.path.isdir(directory):
+        error("account directory does not exist", path=directory)
+        return None, None
+    return config, account
+
+
+def cmd_code(args: argparse.Namespace, extra: List[str]) -> int:
+    """以账号环境打开一个独立的 VS Code 实例（实验功能，feature-app-launch §5.1.1）。"""
+    warn("experimental: `code` relies on undocumented behaviour of VS Code and its OpenAI extension "
+         "(verified with {})".format(apps.VERIFIED_WITH))
+    config, account = _registered_with_dir(args.name)
+    if account is None:
+        return accounts.EXIT_ERROR
+    code_bin = apps.find_code(args.bin)
+    if code_bin is None:
+        error("VS Code's `code` command was not found{}; install it from VS Code (\"Shell Command: Install "
+              "'code' command in PATH\") or pass --bin".format(" at " + args.bin if args.bin else ""))
+        return accounts.EXIT_ERROR
+    data_dir = apps.gui_data_dir(config, account.name, "vscode")
+    if sys.platform == "darwin":
+        if len(data_dir) > apps.SOCKET_DIR_WARN_LENGTH:
+            warn("{} is long; VS Code's socket path inside it may exceed the 104-byte limit".format(data_dir))
+        warn("on macOS, `code` passes the whole environment (including this account's variables) to "
+             "`open --env`, so the values are briefly visible in the process list")
+    command = [code_bin, "--user-data-dir", data_dir] + ([args.path] if args.path else []) + extra
+    argv, env = _account_exec_args(config, account, command)
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os.execve("/bin/sh", argv, env)
+    return accounts.EXIT_ERROR
+
+
+def cmd_app(args: argparse.Namespace) -> int:
+    """以账号的 CODEX_HOME 打开一个独立的 Codex 桌面端实例（仅 macOS，实验功能，feature-app-launch §5.1.2）。
+
+    经 LaunchServices（open -n）启动，只传两个不含密钥的变量：桌面端会用登录 shell 的环境覆盖代理等变量，
+    传账号环境变量既无效，又会把值放进 open 的命令行参数。
+    """
+    if sys.platform != "darwin":
+        error("`app` is only supported on macOS")
+        return accounts.EXIT_ERROR
+    warn("experimental: `app` relies on undocumented behaviour of the Codex desktop app "
+         "(verified with {})".format(apps.VERIFIED_WITH))
+    config, account = _registered_with_dir(args.name)
+    if account is None:
+        return accounts.EXIT_ERROR
+    app_path = args.app or apps.DEFAULT_DESKTOP_APP
+    problem = apps.desktop_app_problem(app_path)
+    if problem:
+        error(problem)
+        return accounts.EXIT_ERROR
+    data_dir = apps.gui_data_dir(config, account.name, "desktop")
+    log = apps.desktop_log(config, account.name)
+    argv = [apps.open_command(), "-n",
+            "--env", "CODEX_HOME=" + accounts.account_dir(config, account.name),
+            "--env", "CODEX_ELECTRON_USER_DATA_PATH=" + data_dir,
+            "--stdout", log, "--stderr", log,
+            "-a", app_path, "--args", "--user-data-dir=" + data_dir]
+    try:
+        proc = subprocess.run(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True,
+                              timeout=60)
+    except subprocess.TimeoutExpired:
+        error("`open` did not return within 60s")
+        return accounts.EXIT_ERROR
+    if proc.returncode != 0:
+        error("`open` failed (exit code {}): {}".format(proc.returncode, proc.stderr.strip()[:500]))
+        return accounts.EXIT_ERROR
+    info("started Codex desktop for {} (log {})".format(account.name, log))
+    return accounts.EXIT_OK
+
+
+def cmd_bind_list() -> int:
+    config, exists = load_config()
+    if not exists or not config.bindings:
+        print("no bindings")
+        return accounts.EXIT_OK
+    effective = binding.resolve(config, os.getcwd())
+    for path in sorted(config.bindings):
+        marker = "*" if effective and effective[0] == path else " "
+        print("{} {}  {}".format(marker, path, config.bindings[path]))
+    return accounts.EXIT_OK
 
 
 def cmd_path(name: str) -> int:

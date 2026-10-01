@@ -50,6 +50,8 @@ The tool goes to `~/.local/share/multi-codex` and the `multi-codex` command to `
 
 Alternatively: `pipx install git+https://github.com/jakoes-wu/multi-codex`.
 
+From v0.5.0 on, every release publishes `multi-codex-<tag>.tar.gz` and `SHA256SUMS`. The remote installer downloads that archive and checks its SHA-256 before installing anything; a mismatch stops the installation. Branches and older releases are installed unverified (the installer says so); set `MULTI_CODEX_REQUIRE_CHECKSUM=1` to refuse them. The checksum is published next to the archive, so it protects against a damaged or altered download, not against a compromised GitHub account.
+
 Run `./install.sh --help` for all options.
 
 ## Quick start
@@ -74,14 +76,17 @@ multi-codex list
 | ---- | ---- |
 | `multi-codex init [--root DIR] [--bin-dir DIR] [--shared-dir DIR] [--shared-items A,B]` | Create or change global settings. |
 | `multi-codex migrate-default NAME [--source DIR] [--copy] [--keep-backup] [--proxy P] [--skip-process-check] [--accept-relogin]` | Turn the default directory into an account. |
-| `multi-codex add NAME [--proxy P] [--shared \| --no-shared] [--adopt]` | Add an account, adopt an existing directory, or change its options. |
+| `multi-codex add NAME [--proxy P] [--shared \| --no-shared] [--adopt] [--config-from OTHER]` | Add an account, adopt an existing directory, or change its options. `--config-from` copies `config.toml` from another account once. |
 | `multi-codex proxy NAME PORT\|URL\|off\|inherit` | Set an account's proxy. |
 | `multi-codex remove NAME` | Unregister an account and delete its launcher. **The account directory is kept.** |
 | `multi-codex apply [-f FILE]` | Converge everything to the configuration (or to `FILE`). |
 | `multi-codex list [--json]` | Show accounts, the state of their launchers, and who is logged in. |
 | `multi-codex usage [NAME ...] [--live] [--timeout SEC] [--json]` | Show rate-limit usage. |
 | `multi-codex doctor [--json]` | Check the installation, configuration and accounts. Read-only. |
-| `multi-codex run NAME [-- COMMAND ...]` | Run a command (default: `codex`) with an account's environment. |
+| `multi-codex run [NAME] [-- COMMAND ...]` | Run a command (default: `codex`) with an account's environment. Without NAME, the account bound to the current directory is used. |
+| `multi-codex bind [NAME [DIR]]` / `unbind [DIR]` | Bind a directory to an account, list bindings, or remove one. |
+| `multi-codex code NAME [PATH] [-- ARGS]` | Open VS Code for an account (experimental). |
+| `multi-codex app NAME` | Open the Codex desktop app for an account (macOS, experimental). |
 | `multi-codex path NAME` | Print an account's directory. |
 | `multi-codex env NAME [KEY=VALUE ...] [--unset KEY] [--clear]` | List or change an account's extra environment variables. |
 | `multi-codex use [NAME] [--skip-process-check]` | Show or change the default account (where `~/.codex` points). |
@@ -116,6 +121,21 @@ Subcommands, options and registered account names (including e-mail addresses) a
 
 `multi-codex run NAME -- COMMAND ...` runs any command with exactly the environment of `codex-NAME` (`CODEX_HOME`, proxy, extra variables). Without a command it runs `codex`. Everything after the first `--` is passed through unchanged; the exit code is the command's. `multi-codex path NAME` prints the account directory.
 
+### Directory bindings
+
+```sh
+cd ~/work/project && multi-codex bind work     # this directory and everything below it use "work"
+multi-codex run -- codex resume                # no account name needed here
+multi-codex bind                               # list bindings; * marks the one in effect here
+multi-codex unbind                             # remove the binding of the current directory
+```
+
+`run` without an account name walks up from the current directory and uses the nearest bound directory. Bindings are stored in `config.json` (not in your project), keyed by the real path of the directory (links resolved, the on-disk letter case used on case-insensitive file systems). `apply -f` keeps the current bindings; removing an account (`remove`, `restore`, `apply -f`) also removes its bindings. Older versions of multi-codex drop the `bindings` field on their next write.
+
+### Copying settings from another account
+
+`multi-codex add new --config-from work` copies `config.toml` from `work` into `new` once; afterwards the two files are independent. An existing `config.toml` with different content is a conflict (nothing is written), and so is copying into an account that shares `config.toml`. The copy includes everything in the file, such as `cli_auth_credentials_store` or absolute paths that point into the other account.
+
 ### Per-account environment variables
 
 ```sh
@@ -126,6 +146,18 @@ multi-codex env work --clear
 ```
 
 The variables are stored in `config.json` (`accounts.<name>.env`) and written into the launcher. Values are used literally (no `$VAR` expansion). `CODEX_HOME` and the proxy variables are reserved: use `multi-codex proxy` for proxies. A launcher with environment variables is readable only by you (mode 0700), and `list --json` shows only the variable names; still, the values are stored in plain text, so do not put secrets there that need stronger protection. Older versions of multi-codex ignore the `env` field and drop it on their next write; run `multi-codex env NAME --clear` before downgrading.
+
+### VS Code and the desktop app (experimental)
+
+```sh
+multi-codex code work ~/src/project        # a separate VS Code window that uses account "work"
+multi-codex app work                       # a separate Codex desktop app instance (macOS)
+```
+
+These rely on undocumented behavior (verified with VS Code 1.139.1, the OpenAI extension 26.928.31416 and the Codex desktop app 26.831.11858) and may break after an update.
+
+- `code` runs `code --user-data-dir <root>/.apps/<name>/vscode` with the account's environment (like `run`). Each account gets its own VS Code settings; extensions are shared from `~/.vscode/extensions`. On macOS the `code` command passes the whole environment, including the account's variables, to `open --env`, so the values are briefly visible in the process list.
+- `app` starts `/Applications/ChatGPT.app` (bundle id `com.openai.codex`) through `open -n` with `CODEX_HOME` set to the account directory and its own data directory `<root>/.apps/<name>/desktop`; output goes to `desktop.log` there. The desktop app loads your login shell's environment, so it uses the shell's proxy settings, not the account's, and the account's extra environment variables are not passed. Log in to one instance at a time: sign-in uses a fixed local callback port.
 
 ### Default account
 
