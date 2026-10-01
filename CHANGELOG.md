@@ -6,6 +6,28 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- `list` shows each account's login (e-mail, `api-key`, `-`, `keyring` or
+  `unreadable`) and plan, read locally from `auth.json` without printing any
+  token, and warns when two accounts are logged in as the same ChatGPT user
+  and workspace.
+- `usage`: show rate-limit usage per account from the latest snapshot in the
+  local session logs, or live with `--live` (through `codex app-server` and
+  the account's launcher; Codex 0.48.0 or newer).
+- `doctor`: read-only health check of the installation, environment,
+  configuration drift and accounts, with a suggested fix for each problem.
+- `--json` for `list`, `usage` and `doctor`.
+
+### Fixed
+
+- `migrate-default` no longer migrates silently when Codex keeps the
+  credentials in the system keyring (`cli_auth_credentials_store = "keyring"`,
+  or `"auto"` without an `auth.json`, in the account's or the system-wide
+  `config.toml`): the keyring entry is tied to the directory path, so the
+  account would be logged out. It now refuses with exit code 3;
+  `--accept-relogin` migrates anyway and reminds you to log in again.
+
 ## [0.2.0] - 2026-09-30
 
 ### Added

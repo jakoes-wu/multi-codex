@@ -17,7 +17,15 @@ from typing import Dict, List, Optional
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SRC = os.path.join(ROOT, "src")
 
+# --version 与 app-server 供 doctor、usage --live 的测试使用；其它调用照旧记录参数与环境变量。
 FAKE_CODEX = """#!/bin/sh
+if [ "$1" = "--version" ]; then
+  echo "codex-cli ${FAKE_CODEX_VERSION:-0.159.2}"
+  exit 0
+fi
+if [ "$1" = "app-server" ]; then
+  exec "$FAKE_PYTHON" "$FAKE_APP_SERVER"
+fi
 printf '%s\\n' "$@" > "$FAKE_CODEX_OUT.args"
 env > "$FAKE_CODEX_OUT.env"
 """
@@ -54,6 +62,10 @@ class CliTestCase(unittest.TestCase):
             "PYTHONPATH": SRC,
             "FAKE_CODEX_OUT": self.fake_out,
             "LC_ALL": "C.UTF-8" if sys.platform.startswith("linux") else "en_US.UTF-8",
+            # 指向不存在的文件：开发机上真实的 /etc/codex/config.toml 不得影响测试结果。
+            "MULTI_CODEX_TEST_SYSTEM_CONFIG": os.path.join(self.tmp, "etc-codex-config.toml"),
+            "FAKE_PYTHON": sys.executable,
+            "FAKE_APP_SERVER": os.path.join(ROOT, "tests", "fake_app_server.py"),
         }
         self.state = os.path.join(self.home, ".config", "multi-codex")
         self.root = os.path.join(self.home, ".cx")

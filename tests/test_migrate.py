@@ -447,5 +447,141 @@ class InProcessTest(MigrateBase):
         self.assertIsNone(self.journal())
 
 
+
+class KeyringStoreTest(MigrateBase):
+    """fix-keyring-migration §11：凭据存在系统钥匙串时，迁移前就要拦下，否则迁移后丢登录。"""
+
+    def set_store(self, line, path=None):
+        self.write(path or os.path.join(self.source, "config.toml"), line + "\n")
+        self.original = self._tree(self.source)
+
+    def assert_untouched(self, before):
+        self.assertEqual(before, self.snapshot(self.home))
+        self.assertIsNone(self.journal())
+        self.assertFalse(os.path.lexists(self.target))
+
+    def test_keyring_refused_without_changes(self):
+        self.set_store('cli_auth_credentials_store = "keyring"')
+        before = self.snapshot(self.home)
+        result = self.migrate()
+        self.assertEqual(result.code, 3, result)
+        self.assertIn("--accept-relogin", result.err)
+        self.assertIn("phase=precheck", result.err)
+        self.assert_untouched(before)
+
+    def test_keyring_refused_in_dry_run(self):
+        self.set_store('cli_auth_credentials_store = "keyring"')
+        before = self.snapshot(self.home)
+        result = self.migrate("--dry-run")
+        self.assertEqual(result.code, 3, result)
+        self.assertIn("--accept-relogin", result.err)
+        self.assert_untouched(before)
+
+    def test_keyring_accepted(self):
+        self.set_store('cli_auth_credentials_store = "keyring"')
+        result = self.migrate("--accept-relogin")
+        self.assertEqual(result.code, 0, result)
+        self.assertIn("log in again", result.err)
+        self.assertIn("log in again: codex-main login", result.out)
+        self.assert_migrated()
+
+    def test_auto_without_auth_file_refused(self):
+        os.unlink(os.path.join(self.source, "auth.json"))
+        self.set_store('cli_auth_credentials_store = "auto"')
+        result = self.migrate()
+        self.assertEqual(result.code, 3, result)
+        self.assertIsNone(self.journal())
+
+    def test_auto_with_auth_file_warns(self):
+        self.set_store('cli_auth_credentials_store = "auto"')
+        result = self.migrate()
+        self.assertEqual(result.code, 0, result)
+        self.assertIn("'auto'", result.err)
+        self.assertNotIn("log in again", result.out)
+        self.assert_migrated()
+
+    def test_file_unset_and_missing_config_pass_silently(self):
+        for line in ('cli_auth_credentials_store = "file"', 'model = "x"', None):
+            with self.subTest(line=line):
+                if line is not None:
+                    self.set_store(line)
+                result = self.migrate()
+                self.assertEqual(result.code, 0, result)
+                self.assertNotIn("keyring", result.err)
+                self.assertNotIn("cli_auth_credentials_store", result.err)
+                self.assert_migrated()
+                self._undo_rename()
+
+    def _undo_rename(self):
+        os.unlink(self.source)
+        os.rename(self.target, self.source)
+        self.ok("remove", "main")
+
+    def test_parsing_edges(self):
+        cases = [
+            ('[profiles.x]\ncli_auth_credentials_store = "keyring"', 0),
+            ("  cli_auth_credentials_store='keyring'   # comment", 3),
+            ('cli_auth_credentials_store = "keyring" # comment', 3),
+        ]
+        for line, expected in cases:
+            with self.subTest(line=line):
+                self.set_store(line)
+                result = self.migrate()
+                self.assertEqual(result.code, expected, result)
+                if expected == 0:
+                    self._undo_rename()
+
+    def test_system_config_layer(self):
+        system = os.path.join(self.tmp, "system-config.toml")
+        self.write(system, 'cli_auth_credentials_store = "keyring"\n')
+        env = {"MULTI_CODEX_TEST_SYSTEM_CONFIG": system}
+        result = self.migrate(env=env)
+        self.assertEqual(result.code, 3, result)
+        self.assertIn(system, result.err)
+        # 账号目录里的设置优先于系统级配置。
+        self.set_store('cli_auth_credentials_store = "file"')
+        result = self.migrate(env=env)
+        self.assertEqual(result.code, 0, result)
+        self.assert_migrated()
+
+    def test_restart_after_rollback_keeps_accept_relogin(self):
+        self.set_store('cli_auth_credentials_store = "keyring"')
+        crashed = self.migrate("--accept-relogin", "--copy",
+                               env={"MULTI_CODEX_TEST_FAIL_AT": "journal-parked",
+                                    "MULTI_CODEX_TEST_CRASH_AT": "journal-rolled-back"})
+        self.assertEqual(crashed.code, CRASH, crashed)
+        self.assertIn('"phase": "rolled-back"', self.journal())
+        # 不带开关重跑：放行只能来自事务记录里首次的选择。
+        rerun = self.migrate("--copy")
+        self.assertEqual(rerun.code, 0, rerun)
+        self.assertIn("previous rollback finished", rerun.out)
+        self.assertIn("log in again: codex-main login", rerun.out)
+        self.assert_migrated()
+
+    def test_resume_after_crash_prints_relogin_hint(self):
+        self.set_store('cli_auth_credentials_store = "keyring"')
+        crashed = self.migrate("--accept-relogin", env={"MULTI_CODEX_TEST_CRASH_AT": "journal-moved"})
+        self.assertEqual(crashed.code, CRASH, crashed)
+        rerun = self.migrate()
+        self.assertEqual(rerun.code, 0, rerun)
+        self.assertIn("log in again: codex-main login", rerun.out)
+        self.assert_migrated()
+
+    def test_resume_journal_from_0_2_0(self):
+        # 0.2.0 写的记录没有 accept_relogin / relogin_needed；文件系统摆成 rename 模式的 moved 状态。
+        os.makedirs(self.root, mode=0o700)
+        os.rename(self.source, self.target)
+        os.makedirs(self.state, exist_ok=True)
+        journal = {"version": 1, "name": "main", "source": self.source, "target": self.target,
+                   "backup": self.source + ".multi-codex-bak.20260101_000000", "mode": "rename",
+                   "phase": "moved", "started_at": "2026-01-01T00:00:00+0000", "copy": False,
+                   "keep_backup": False, "proxy": None, "skip_process_check": True}
+        self.write(os.path.join(self.state, "migrate-journal.json"), json.dumps(journal))
+        result = self.migrate()
+        self.assertEqual(result.code, 0, result)
+        self.assertNotIn("log in again", result.out)
+        self.assert_migrated()
+
+
 if __name__ == "__main__":
     unittest.main()

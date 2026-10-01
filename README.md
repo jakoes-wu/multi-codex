@@ -20,6 +20,8 @@ codex            -> ~/.codex, which can itself become one of the accounts
 - **One-step deployment** — `install.sh --config accounts.json` installs the tool and creates every account in the file.
 - **Idempotent** — every command can be re-run safely. Unchanged state is reported as `unchanged`; conflicts with files multi-codex does not own are reported without changing anything; an interrupted migration resumes where it stopped.
 - **Optional shared resources** — link `AGENTS.md`, `skills`, `rules`, `agents` and so on from one shared directory into selected accounts.
+- **See who is logged in and how much quota is left** — `list` shows each account's email and plan; `usage` shows the 5-hour / weekly usage from local session logs, or live with `--live`.
+- **Health check** — `doctor` checks the installation, environment and accounts, and tells you which command fixes each problem.
 
 ## Requirements
 
@@ -70,14 +72,28 @@ multi-codex list
 | Command | What it does |
 | ---- | ---- |
 | `multi-codex init [--root DIR] [--bin-dir DIR] [--shared-dir DIR] [--shared-items A,B]` | Create or change global settings. |
-| `multi-codex migrate-default NAME [--source DIR] [--copy] [--keep-backup] [--proxy P] [--skip-process-check]` | Turn the default directory into an account. |
+| `multi-codex migrate-default NAME [--source DIR] [--copy] [--keep-backup] [--proxy P] [--skip-process-check] [--accept-relogin]` | Turn the default directory into an account. |
 | `multi-codex add NAME [--proxy P] [--shared \| --no-shared] [--adopt]` | Add an account, adopt an existing directory, or change its options. |
 | `multi-codex proxy NAME PORT\|URL\|off\|inherit` | Set an account's proxy. |
 | `multi-codex remove NAME` | Unregister an account and delete its launcher. **The account directory is kept.** |
 | `multi-codex apply [-f FILE]` | Converge everything to the configuration (or to `FILE`). |
-| `multi-codex list` | Show accounts and the state of their launchers. |
+| `multi-codex list [--json]` | Show accounts, the state of their launchers, and who is logged in. |
+| `multi-codex usage [NAME ...] [--live] [--timeout SEC] [--json]` | Show rate-limit usage. |
+| `multi-codex doctor [--json]` | Check the installation, configuration and accounts. Read-only. |
 
-Every write command accepts `--dry-run`.
+Every write command accepts `--dry-run`. `list`, `usage` and `doctor` never change anything; with `--json` they print a single JSON object on stdout (with a `"version": 1` field) and keep warnings on stderr. Use `--json` in scripts: the table layout is not guaranteed to stay the same.
+
+### Login and usage
+
+`list` adds two columns, LOGIN and PLAN, read from each account's local `auth.json`. No token is ever printed, and nothing is sent anywhere. LOGIN is the e-mail address, `api-key`, `-` (not logged in), `keyring` (credentials are in the system keyring and cannot be read from files) or `unreadable`. PLAN is the plan recorded when the current token was issued; it is updated the next time Codex refreshes the token. If two accounts are logged in as the same ChatGPT user and workspace, `list` warns you: they share one quota.
+
+`multi-codex usage` reads the most recent rate-limit snapshot from each account's session logs (`sessions/` and `archived_sessions/`). It is offline but can be out of date; a window that has reset since the snapshot is shown as `reset since snapshot`.
+
+`multi-codex usage --live` runs `codex app-server` through the account's launcher (so the account's proxy applies) and asks it for the current usage (`account/rateLimits/read`, Codex 0.48.0 or newer). multi-codex never reads or sends tokens itself. As with any Codex run, Codex may refresh the account's token and write it back to that account's directory. Accounts are queried one after another; `--timeout` limits each one (default 30 seconds).
+
+### Health check
+
+`multi-codex doctor` prints one line per check (`ok`, `warn` or `fail`) and a `fix:` line with the command to run. It checks the `codex` executable and its version, the configuration, unfinished migrations, whether `bin_dir` is on `PATH`, environment variables that break isolation, where `~/.codex` points, whether the files match the configuration (the same plan `apply` would execute), each account's login, and duplicate logins. It does not repair anything and does not use the network. The exit code is 1 if any check fails, otherwise 0.
 
 ### Default locations
 
@@ -133,9 +149,10 @@ multi-codex apply -f accounts.json
 
 `multi-codex migrate-default main`:
 
-1. refuses to start while any process has files, its working directory or its executable inside `~/.codex` (close Codex, IDE extensions and the ChatGPT browser extension host first);
-2. renames `~/.codex` to `~/.cx/main` when both are on the same file system, otherwise copies, verifies every file by SHA-256, and parks the original as `~/.codex.multi-codex-bak.<timestamp>`;
-3. creates the link `~/.codex -> ~/.cx/main` and registers the account.
+1. refuses to start when Codex stores the credentials in the system keyring (`cli_auth_credentials_store = "keyring"` in `config.toml` or `/etc/codex/config.toml`, or `"auto"` without an `auth.json`): the keyring entry is tied to the directory path, so you would be logged out after the move. Pass `--accept-relogin` to migrate anyway and log in again afterwards;
+2. refuses to start while any process has files, its working directory or its executable inside `~/.codex` (close Codex, IDE extensions and the ChatGPT browser extension host first);
+3. renames `~/.codex` to `~/.cx/main` when both are on the same file system, otherwise copies, verifies every file by SHA-256, and parks the original as `~/.codex.multi-codex-bak.<timestamp>`;
+4. creates the link `~/.codex -> ~/.cx/main` and registers the account.
 
 Progress is recorded in `~/.config/multi-codex/migrate-journal.json`. If the migration is interrupted, run the same command again and it continues from the actual state on disk. While a migration is unfinished, other write commands refuse to run.
 
@@ -171,9 +188,9 @@ If you already linked an account to the shared directory by hand, `multi-codex a
 | Code | Meaning |
 | ---- | ---- |
 | 0 | Success, or already in the desired state |
-| 1 | Runtime error (I/O, invalid configuration file, failed verification, lock held by another command) |
+| 1 | Runtime error (I/O, invalid configuration file, failed verification, lock held by another command); `usage`: at least one account failed; `doctor`: at least one check failed |
 | 2 | Invalid command-line arguments |
-| 3 | Conflict with files multi-codex does not own; nothing was changed |
+| 3 | Conflict with files multi-codex does not own, or `migrate-default` refused because credentials are in the system keyring; nothing was changed |
 | 4 | The migration source is in use |
 
 ## Uninstalling
