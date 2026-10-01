@@ -6,7 +6,7 @@
 > - `code`：新的 VS Code 实例（`--user-data-dir .../.apps/<名>/vscode`）在 4 秒内由扩展宿主拉起 `codex app-server`，它的 `CODEX_HOME` 是该账号目录；这个 codex 二进制来自 `~/.vscode/extensions/openai.chatgpt-26.928.31416`，证明换了用户数据目录后扩展仍然可用（§1.1 中源码与官方文档的矛盾，以源码为准）。
 > - `app`：新的桌面端实例（`ChatGPT --user-data-dir=.../.apps/<名>/desktop`）拉起的 `codex app-server` 的 `CODEX_HOME` 是该账号目录，说明合并登录 shell 环境后 `CODEX_HOME` 确实被恢复；单实例锁 `SingletonLock` 在该数据目录中；`desktop.log` 有输出，权限仍为 0600。
 > - 补测“与原有实例同时存在”（2026-10-01）：icloud 实例运行时，用 `open -a /Applications/ChatGPT.app`（与点 Dock 图标相同）打开桌面端，**没有**启动默认实例，只是把 icloud 实例切到前台，因为 LaunchServices 把它们视为同一个应用。改用 `open -n -a` 后，默认实例（拉起的 codex 没有设置 `CODEX_HOME`，即使用 `~/.codex`）与 icloud 实例（codex 的 `CODEX_HOME` 为该账号目录）同时运行，各用各的目录。README 已补充这条提醒。
-> - 界面核对：桌面端截图停在设置页，看不到账号；截取 VS Code 窗口时触发了 macOS 的屏幕录制权限提示，未继续。随后由用户亲自查看：VS Code 新窗口中 OpenAI 扩展显示的是 jakoes.wu@icloud.com，与进程环境一致；桌面端界面上的账号未核对，以进程环境为准。
+> - 界面核对：桌面端截图停在设置页，看不到账号；截取 VS Code 窗口时触发了 macOS 的屏幕录制权限提示，未继续。随后由用户亲自查看：VS Code 新窗口中 OpenAI 扩展显示的是 jakoes.wu@icloud.com，与进程环境一致；桌面端界面上登录的账号未核对。进程环境中的 `CODEX_HOME` 只能证明桌面端的 app-server 使用了该账号目录，不能证明界面上登录的是该账号：该目录的凭据失效时，桌面端会显示登录页（同日实测默认实例时就出现过，原因是 `~/.codex` 的凭据自 8 月 26 日起没有刷新）。
 >
 > 本文其余部分保持方案原文。
 
