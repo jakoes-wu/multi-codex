@@ -282,6 +282,64 @@ Based on the Codex source code (openai/codex at `6b4daafd`):
 
 Separate directories keep the local state of the accounts apart. They are **not** a security boundary: any program running as your user can read every account directory.
 
+## FAQ
+
+### Which account do VS Code and the desktop app use when I start them from the Dock?
+
+The one in `~/.codex`. Apps started from the Dock or Finder get no `CODEX_HOME` from your terminal; both the OpenAI extension and the Codex desktop app then fall back to `~/.codex` (`process.env.CODEX_HOME ?? ~/.codex` in their code). They do read your login shell's environment, so a `CODEX_HOME` exported in your shell profile would apply, but setting it there is not recommended: it also changes what plain `codex` uses in every terminal.
+
+### How do I change that default account?
+
+Let multi-codex manage `~/.codex`, then switch with `use`:
+
+```sh
+# Close Codex everywhere first (VS Code, the desktop app, codex sessions in terminals)
+multi-codex migrate-default main        # turn the current ~/.codex into an account named "main"
+multi-codex use work                    # ~/.codex now points to account "work"
+multi-codex use                         # show the current default account
+```
+
+From then on, apps started from the Dock use the account `use` points to. `multi-codex restore main` undoes the migration. Both commands refuse to run while a process is using the directories involved; see [Default account](#default-account).
+
+### How do I open VS Code with a particular account?
+
+```sh
+multi-codex code work ~/src/project
+```
+
+This starts a separate VS Code instance with its own user data directory and the account's environment. A separate data directory is required: with the same one, `code` only hands the request to the VS Code that is already running, whose Codex extension keeps using the environment it started with. The extension has no setting for choosing an account. See [VS Code and the desktop app (experimental)](#vs-code-and-the-desktop-app-experimental).
+
+### How do I open the Codex desktop app with a particular account?
+
+```sh
+multi-codex app work
+```
+
+To do it by hand, both variables are needed: without `CODEX_ELECTRON_USER_DATA_PATH` the desktop app replaces `CODEX_HOME` with your login shell's value after it starts, and shares its data directory with the default instance.
+
+```sh
+D="$HOME/.cx/.apps/work/desktop"; mkdir -p "$D"
+open -n --env CODEX_HOME="$HOME/.cx/work" --env CODEX_ELECTRON_USER_DATA_PATH="$D" \
+  -a /Applications/ChatGPT.app --args --user-data-dir="$D"
+```
+
+### Where do I run `open -n -a /Applications/ChatGPT.app`?
+
+In any terminal window (Terminal, iTerm, Warp, …), from any directory. It is the macOS `open` command, not part of multi-codex. `-n` starts a new instance even if one is running; without `CODEX_HOME` the new instance uses `~/.codex`. You need it to run the default account next to an account instance started with `multi-codex app`, because opening the app normally (Dock, Finder, `open -a`) only brings the running instance to the front.
+
+### `codex login status` says I am logged in, but the desktop app asks me to sign in. Why?
+
+`codex login status` only checks that the credentials file exists; it does not check that the token still works. If a directory has not been used for a while, its token may no longer be accepted, and the app shows the sign-in page. Sign in again for that directory (for an account: `codex-<name> login`). `multi-codex usage --live NAME` asks Codex for live usage and fails if the login is no longer valid.
+
+### How do I upgrade multi-codex?
+
+Run the installer again; configuration, accounts and launchers are not touched:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/jakoes-wu/multi-codex/main/install.sh | sh
+multi-codex --version
+```
+
 ## Exit codes
 
 | Code | Meaning |
