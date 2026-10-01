@@ -368,6 +368,87 @@ multi-codex add work --shared
 
 分开的目录只是让各账号的本地状态互不干扰，**不是**安全边界：以你的用户身份运行的任何程序，都能读取所有账号目录。
 
+## 常见问题
+
+### 从 Dock 启动 VS Code 和桌面端时，用的是哪个账号？
+
+用的是 `~/.codex` 里的账号。原因：
+- 从 Dock 或 Finder 启动的应用拿不到终端里设置的 `CODEX_HOME`；
+- 拿不到时，OpenAI 扩展和 Codex 桌面端都退回到 `~/.codex`，它们的代码里写的是 `process.env.CODEX_HOME ?? ~/.codex`。
+
+它们会读取登录 shell 的环境，所以在 shell 配置文件里导出 `CODEX_HOME` 也能生效。但不推荐这样做：终端里直接运行的 `codex` 也会跟着换账号。
+
+### 怎样切换这个默认账号？
+
+让 multi-codex 接管 `~/.codex`，然后用 `use` 切换：
+
+```sh
+# 先关掉所有在用 Codex 的程序（VS Code、桌面端、终端里的 codex 会话）
+multi-codex migrate-default main        # 把现在的 ~/.codex 变成名为 main 的账号
+multi-codex use work                    # 让 ~/.codex 指向 work 账号
+multi-codex use                         # 查看当前默认账号
+```
+
+之后从 Dock 启动的应用，用的就是 `use` 指向的账号。
+
+要撤销迁移，先让 `~/.codex` 指回原账号：先执行 `multi-codex use main`，再执行 `multi-codex restore main`。`~/.codex` 指向其它账号时，`restore` 会拒绝执行。
+
+有进程正在使用相关目录时，`use` 和 `restore` 都会拒绝执行，所以要先关掉 Codex，详见“默认账号”一节。
+
+### 怎样用指定的账号打开 VS Code？
+
+```sh
+multi-codex code work ~/src/project
+```
+
+它会以该账号的环境，启动一个使用独立用户数据目录的 VS Code 实例。
+
+用户数据目录必须独立：如果用同一个，`code` 只会把请求交给已经在运行的 VS Code，而那个窗口里的 Codex 扩展仍然使用它启动时的环境。
+
+OpenAI 扩展本身没有选择账号的设置项。详见“按账号打开 VS Code 与桌面端（实验功能）”一节。
+
+### 怎样用指定的账号打开 Codex 桌面端？
+
+```sh
+multi-codex app work
+```
+
+如果要手工执行，下面两个变量都要设置。缺少 `CODEX_ELECTRON_USER_DATA_PATH` 时，会出现两个问题：
+- 桌面端启动后会用登录 shell 中的值替换 `CODEX_HOME`；
+- 它会和默认实例共用数据目录。
+
+```sh
+D="$HOME/.cx/.apps/work/desktop"; mkdir -p "$D"
+open -n --env CODEX_HOME="$HOME/.cx/work" --env CODEX_ELECTRON_USER_DATA_PATH="$D" \
+  -a /Applications/ChatGPT.app --args --user-data-dir="$D"
+```
+
+### `open -n -a /Applications/ChatGPT.app` 在哪里执行？
+
+在任意终端窗口（Terminal、iTerm、Warp 等）中执行即可，与当前目录无关。它是 macOS 自带的 `open` 命令，不属于 multi-codex。
+
+- `-n` 表示即使已经有实例在运行，也再启动一个新实例；
+- 不设置 `CODEX_HOME` 时，新实例使用 `~/.codex`。
+
+用 `multi-codex app` 打开了某个账号的实例后，如果还想同时使用默认账号，就需要这条命令：此时从 Dock、Finder 或用 `open -a` 正常打开，只会把正在运行的那个实例切到前台。
+
+### `codex login status` 显示已登录，桌面端却要求登录，为什么？
+
+`codex login status` 只检查凭据文件是否存在，不检查令牌是否仍然有效。一个目录长时间没有使用，令牌可能已经不被接受，桌面端就会显示登录页。
+
+解决办法：给这个目录重新登录，账号目录执行 `codex-<名称> login`。
+
+`multi-codex usage --live 名称` 会向 Codex 查询实时额度，登录失效时会报错，可以用来检查登录是否仍然有效。
+
+### 怎样升级 multi-codex？
+
+重新执行安装命令即可，配置、账号和启动命令都不受影响：
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/jakoes-wu/multi-codex/main/install.sh | sh
+multi-codex --version
+```
+
 ## 退出码
 
 | 退出码 | 含义 |
