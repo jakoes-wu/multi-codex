@@ -1,23 +1,27 @@
 """启动命令 `<bin_dir>/codex-<名称>` 的生成与识别。
 
-启动命令是由 config.json 推导出的产物，内容完全由 (账号名, 账号目录, 代理) 决定，
+启动命令是由 config.json 推导出的产物，内容完全由 (账号名, 账号目录, 代理, 环境变量) 决定，
 所以“内容相同即 unchanged”就是幂等判断。第 2 行的受管标记用来区分本工具生成的文件
 和用户自己的同名文件：没有标记的文件一律不覆盖、不删除。
 """
 
 import os
 import shlex
+import stat
 from typing import Dict, Optional
 
-from .config import PROXY_INHERIT, PROXY_OFF, is_socks
+from .config import PROXY_ENV_VARS, PROXY_INHERIT, PROXY_OFF, is_socks
 from .fsutil import KIND_FILE, entry_kind, read_text
 
 MARKER_PREFIX = "# managed-by: multi-codex account="
 LAUNCHER_PREFIX = "codex-"
 LAUNCHER_MODE = 0o755
+# 设置了账号环境变量的启动命令只允许本人读写执行：值里可能有 API key。
+PRIVATE_LAUNCHER_MODE = 0o700
+# `multi-codex run` 通过这个环境变量把脚本交给 sh，而不是放进命令行参数（其它用户能用 ps 看到）。
+RUN_SCRIPT_ENV = "MULTI_CODEX_RUN_SCRIPT"
 
-_PROXY_VARS = ("HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY", "NO_PROXY",
-               "https_proxy", "http_proxy", "all_proxy", "no_proxy")
+_PROXY_VARS = PROXY_ENV_VARS
 _NO_PROXY_HOSTS = "localhost,127.0.0.1,::1"
 
 
@@ -25,8 +29,35 @@ def launcher_path(bin_dir: str, name: str) -> str:
     return os.path.join(bin_dir, LAUNCHER_PREFIX + name)
 
 
-def render(name: str, account_dir: str, proxy: str) -> str:
-    """生成 POSIX sh 启动命令的完整内容。所有值都经 shlex.quote 转义。"""
+def launcher_mode(env: Optional[Dict[str, str]]) -> int:
+    return PRIVATE_LAUNCHER_MODE if env else LAUNCHER_MODE
+
+
+def launcher_file_ok(path: str, content: str, env: Optional[Dict[str, str]]) -> bool:
+    """启动命令是否与期望一致；_plan_launcher 与 launcher_status 共用，两处判断必须相同。
+
+    没有环境变量时只要求内容相同且可执行，与 0.3.0 一样不比较权限位：用户手工改成 0775，
+    或 bin_dir 所在文件系统忽略 chmod 时，不应被反复判为需要重写。
+    有环境变量时还要求组和其他用户没有任何权限，否则密钥会被其他用户读到。
+    """
+    if read_text(path) != content or not os.access(path, os.X_OK):
+        return False
+    if env:
+        try:
+            return stat.S_IMODE(os.stat(path).st_mode) & 0o077 == 0
+        except OSError:
+            return False
+    return True
+
+
+def render(name: str, account_dir: str, proxy: str, env: Optional[Dict[str, str]] = None,
+           command_mode: bool = False) -> str:
+    """生成 POSIX sh 启动命令的完整内容。所有值都经 shlex.quote 转义。
+
+    env 为空时，输出必须与 0.3.0 逐字节相同，否则升级后所有启动命令都会被判为 stale。
+    command_mode 供 `multi-codex run` 使用：环境设置与启动命令完全相同，只是最后执行 "$@" 而不是 codex，
+    这样两者不会各算一套环境变量。
+    """
     q_dir = shlex.quote(account_dir)
     lines = [
         "#!/bin/sh",
@@ -43,6 +74,14 @@ def render(name: str, account_dir: str, proxy: str) -> str:
         "export CODEX_HOME",
     ]
     lines.extend(_proxy_lines(proxy))
+    for key in sorted(env or {}):
+        # 键名已按 [A-Za-z_][A-Za-z0-9_]* 校验，可以直接写；值按字面引用，不经 shell 展开。
+        lines.append("{}={}; export {}".format(key, shlex.quote(env[key]), key))
+    if command_mode:
+        # 脚本经环境变量传入；先清掉它，被运行的命令不会继承这份含密钥的脚本。
+        lines.insert(1, "unset " + RUN_SCRIPT_ENV)
+        lines.extend(['exec "$@"', ""])
+        return "\n".join(lines)
     lines.extend([
         "if ! command -v codex >/dev/null 2>&1; then",
         '  echo "multi-codex: codex not found in PATH" >&2',

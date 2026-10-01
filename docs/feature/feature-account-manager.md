@@ -170,6 +170,8 @@ Codex CLI 通过环境变量 `CODEX_HOME` 决定配置、凭据、会话数据�
 | `list [--json]` | 列出账号、目录、代理、启动命令状态和登录身份 | 只读；身份列见 `docs/feature/feature-account-insight.md` |
 | `usage [名称 ...] [--live] [--timeout 秒] [--json]` | 显示额度 | 只读、不加锁；见 `feature-account-insight.md` |
 | `doctor [--json]` | 体检 | 只读、不加锁；见 `feature-account-insight.md` |
+| `completion`、`run`、`path`、`env` | 补全、在账号环境下运行命令、输出目录、每账号环境变量 | 见 `docs/feature/feature-cli-ergonomics.md` |
+| `use [名称]`、`restore 名称` | 切换默认账号、撤销迁移 | 见 `docs/feature/feature-default-switch.md` |
 
 各命令的补充规则：
 

@@ -25,6 +25,11 @@ codex            -> ~/.codex，它本身也可以迁移成其中一个账号
 - **可选的共享资源**：把 `AGENTS.md`、`skills`、`rules`、`agents` 等从同一个共享目录软链到指定账号。
 - **看得到登录身份和剩余额度**：`list` 显示每个账号登录的邮箱和套餐；`usage` 从本地会话记录显示 5 小时和每周额度，加 `--live` 时查询实时额度。
 - **体检**：`doctor` 检查安装、环境和各账号，并给出修复每个问题的命令。
+- **日常辅助**：
+  - shell 补全（bash、zsh、fish）；
+  - 用 `run` 在某个账号的环境下运行任意命令；
+  - 每个账号的额外环境变量；
+  - 用 `use` 切换默认账号、用 `restore` 撤销迁移。
 
 ## 环境要求
 
@@ -82,6 +87,12 @@ multi-codex list
 | `multi-codex list [--json]` | 列出账号、启动命令的状态和登录身份 |
 | `multi-codex usage [名称 ...] [--live] [--timeout 秒] [--json]` | 显示额度用量 |
 | `multi-codex doctor [--json]` | 检查安装、配置和各账号，只读 |
+| `multi-codex run 名称 [-- 命令 ...]` | 在账号的环境下运行命令（默认运行 `codex`） |
+| `multi-codex path 名称` | 输出账号目录 |
+| `multi-codex env 名称 [KEY=VALUE ...] [--unset KEY] [--clear]` | 列出或修改账号的额外环境变量 |
+| `multi-codex use [名称] [--skip-process-check]` | 显示或切换默认账号（`~/.codex` 指向的账号） |
+| `multi-codex restore 名称 [--skip-process-check] [--accept-relogin]` | 撤销 `migrate-default`：把账号移回 `~/.codex` |
+| `multi-codex completion bash\|zsh\|fish` | 输出 shell 补全脚本 |
 
 所有写命令都支持 `--dry-run`。`list`、`usage`、`doctor` 不会修改任何东西；加 `--json` 时，stdout 上只输出一个 JSON 对象（带 `"version": 1` 字段），警告仍写到 stderr。脚本请使用 `--json`：表格格式不保证稳定。
 
@@ -114,6 +125,49 @@ PLAN 是当前令牌签发时的套餐，Codex 下次刷新令牌后才会更新
 - 重复登录。
 
 它不修复任何东西，也不联网。有任一项为 fail 时退出码为 1，否则为 0。
+
+### shell 补全
+
+```sh
+eval "$(multi-codex completion bash)"     # 写进 ~/.bashrc
+eval "$(multi-codex completion zsh)"      # 写进 ~/.zshrc，放在 compinit 之后
+multi-codex completion fish | source      # 写进 ~/.config/fish/config.fish
+```
+
+可以补全子命令、选项和已登记的账号名（包括邮箱形式的名字）。
+
+### 运行其它命令
+
+`multi-codex run 名称 -- 命令 ...` 以与 `codex-名称` 完全相同的环境运行任意命令：`CODEX_HOME`、代理、额外的环境变量都一样。不带命令时运行 `codex`。第一个 `--` 之后的内容原样传给命令，退出码就是该命令的退出码。
+
+`multi-codex path 名称` 输出账号目录。
+
+### 每个账号的环境变量
+
+```sh
+multi-codex env work OPENAI_BASE_URL=https://example.com/v1 TERM_PROGRAM=vscode
+multi-codex env work                      # 列出
+multi-codex env work --unset TERM_PROGRAM
+multi-codex env work --clear
+```
+
+- **存放位置**：变量保存在 `config.json` 的 `accounts.<名称>.env` 中，并写进启动命令。
+- **按字面使用**：值不会展开 `$VAR`。
+- **保留变量**：`CODEX_HOME` 和代理变量不能在这里设置，代理请用 `multi-codex proxy`。
+- **保护范围**：设置了环境变量的启动命令只有你自己能读（权限 0700），`list --json` 也只显示变量名。但值仍以明文保存，需要更强保护的密钥不要放在这里。
+- **降级前先清空**：旧版本的 multi-codex 会忽略 `env` 字段，并在下一次写配置时丢掉它；降级前请先执行 `multi-codex env 名称 --clear`。
+
+### 默认账号
+
+迁移之后，`~/.codex` 是指向某个账号的软链。直接运行的 `codex`、Codex 桌面端和 IDE 扩展都使用这个账号。`multi-codex use` 显示当前是哪个账号，`multi-codex use 名称` 把软链原子地改指向另一个账号。
+
+**切换前要关闭 Codex**：
+- 没有设置 `CODEX_HOME` 的 Codex 进程，运行期间会按 `~/.codex` 重新打开文件。如果在它运行时切换，两个账号的文件会混在一起。
+- 因此只要有进程正在使用当前的默认账号，`use` 就拒绝切换（退出码 4）。用 `codex-<名称>` 启动的会话无法与之区分，也会被拦下。
+- 请先关闭 CLI、桌面端、IDE 扩展和 app-server daemon，再切换，然后重新打开它们。
+- 这项检查只能看到检查那一刻打开着的文件，所以只是一道保险，不能保证完全没有问题。
+
+如果对 `~/.codex` 当前指向的账号执行了 `remove`，软链会指向一个已注销的目录，`doctor` 会报告这种情况。
 
 ### 默认位置
 
@@ -199,7 +253,25 @@ multi-codex apply -f accounts.json
 
 **环境变量提醒**：如果设置了 `CODEX_HOME`、`CODEX_SQLITE_HOME`、`CODEX_API_KEY` 或 `CODEX_ACCESS_TOKEN`，工具会给出警告，因为这些变量会覆盖或绕过账号之间的隔离。
 
-### 手工撤销迁移
+### 撤销迁移
+
+```sh
+multi-codex restore main
+```
+
+`restore` 依次执行：
+1. 删除 `~/.codex` 软链；
+2. 把 `~/.cx/main` 移回 `~/.codex`；
+3. 注销账号，删除它的启动命令。目录里的共享软链会保留，照常可用。
+
+它与 `migrate-default` 做同样的检查：
+- 目录是否正被占用；
+- 凭据是否存在系统钥匙串里。如果是，移回后会丢失登录；加 `--accept-relogin` 可以照常执行。
+
+其它注意事项：
+- **中断后**：重跑同一命令即可继续。restore 没完成之前，其它写命令会被拒绝。
+- **`~/.codex` 指向的不是这个账号时**：先执行 `multi-codex use main`。
+- **账号目录与 `~/.codex` 不在同一个文件系统时**：需要手工撤销：
 
 ```sh
 rm ~/.codex                     # 删除软链（只删链接本身）
@@ -226,15 +298,36 @@ multi-codex add work --shared
 - 如果你以前手工把某个账号软链到了共享目录，可以用 `multi-codex add 名称 --shared --adopt` 让工具接管这些链接：链接本身不重建，但之后关闭共享时也会被删除。只接管已经指向对应共享条目的链接。
 - 链接位置上如果已经是真实的文件或目录，视为冲突，绝不覆盖。
 
+### 哪些可以共享
+
+依据 Codex 源码（openai/codex，版本 `6b4daafd`）：
+
+| 条目 | 用途 | 能否共享 | 原因 |
+| ---- | ---- | ---- | ---- |
+| `AGENTS.md` | 全局指令 | 可以（默认共享项） | 每次加载都重新读取，Codex 不写它 |
+| `agents/` | 自定义 agent 角色 | 可以（默认共享项） | 只读 |
+| `rules/` | 执行策略（“总是允许”的命令） | 可以（默认共享项） | 追加时加文件锁。共享后，一个账号批准的“总是允许”对所有账号生效 |
+| `skills/` | 技能 | 可以（默认共享项） | 启动时内置技能有变化，Codex 会重写 `skills/.system`；各账号使用同一个 Codex 版本就没有影响 |
+| `config.toml` | 配置 | 可以，但要小心 | Codex 写入时会跟随软链、原子替换目标文件，软链不会被破坏；但没有跨进程锁，两个账号同时改配置时，可能丢掉其中一次修改 |
+| `history.jsonl` | 输入历史 | 可以 | 读写都加文件锁；各账号的输入历史会合在一起 |
+| `auth.json`、`secrets/`、`.credentials.json`、`.env` | 凭据 | **不能** | 它们就是账号本身 |
+| `installation_id` | 安装标识 | 不要共享 | 会随请求发出；共享后多个账号看起来像同一个安装 |
+| `*.sqlite`（`state_5.sqlite` 等） | 线程、日志、记忆数据库 | **不能** | `state_5.sqlite` 记录了账号 ID |
+| `sessions/`、`archived_sessions/`、`session_index.jsonl` | 会话记录 | 不要共享 | 索引只有进程内的锁；会话中记有创建者账号 |
+| `models_cache.json`、`cache/` | 缓存 | 不需要 | 按账号区分，账号不符就当作未命中 |
+| `app-server-control/`、`app-server-daemon/`、`packages/`、`tmp/`、`.tmp/`、`log/`、`shell_snapshots/` | 运行时状态 | 不要共享 | 按进程或按会话使用 |
+
+分开的目录只是让各账号的本地状态互不干扰，**不是**安全边界：以你的用户身份运行的任何程序，都能读取所有账号目录。
+
 ## 退出码
 
 | 退出码 | 含义 |
 | ---- | ---- |
 | 0 | 成功，或已处于目标状态 |
-| 1 | 运行错误（IO 错误、配置文件不合法、校验失败、锁被其它命令占用）；`usage` 中至少一个账号失败；`doctor` 中至少一项检查为 fail |
+| 1 | 运行错误（IO 错误、配置文件不合法、校验失败、锁被其它命令占用、未完成的迁移或 restore 拦下了命令）；`usage` 中至少一个账号失败；`doctor` 中至少一项检查为 fail |
 | 2 | 命令行参数不合法 |
-| 3 | 与不归 multi-codex 管理的文件冲突，或因凭据存在系统钥匙串而拒绝迁移；没有做任何修改 |
-| 4 | 迁移源目录正被占用 |
+| 3 | 与不归 multi-codex 管理的文件冲突；`migrate-default` 或 `restore` 因凭据存在系统钥匙串而拒绝；`use` / `restore` 发现 `~/.codex` 状态不对或不在同一个文件系统。没有做任何修改 |
+| 4 | 要迁移、要切走或要移回的目录正被占用 |
 
 ## 卸载
 
