@@ -2,9 +2,17 @@
 
 **English** | [简体中文](README.zh-CN.md)
 
-Run several [Codex CLI](https://github.com/openai/codex) accounts side by side on one machine.
+Use several [Codex CLI](https://github.com/openai/codex) accounts on one machine, at the same time. Each account keeps its own login, settings, history and, if you like, its own proxy. No more logging out and in again.
 
-Codex keeps its configuration, credentials and session databases in the directory named by `CODEX_HOME` (default `~/.codex`). multi-codex gives every account its own directory and its own launcher command, optionally with its own proxy:
+```sh
+codex-work          # Codex, logged in with your work account
+codex-personal      # Codex, logged in with your personal account, in another terminal
+multi-codex list    # which account is logged in as whom
+```
+
+## How it works
+
+Codex keeps everything (settings, credentials, sessions) in one directory, `CODEX_HOME`, which is `~/.codex` by default. multi-codex gives every account its own directory and a small launcher command, `codex-<name>`, that starts Codex with that directory:
 
 ```text
 codex-work       -> CODEX_HOME=~/.cx/work       HTTPS_PROXY=http://127.0.0.1:7901
@@ -12,63 +20,96 @@ codex-personal   -> CODEX_HOME=~/.cx/personal   (inherits your shell's proxy set
 codex            -> ~/.codex, which can itself become one of the accounts
 ```
 
-## Features
+The launchers are plain shell scripts. They keep working even if you uninstall multi-codex.
 
-- **Migrate the default directory** — turn your existing `~/.codex` into a named account and leave a compatibility link behind, so `codex` and old absolute paths keep working.
-- **Add accounts** — create an account directory and a `codex-<name>` launcher, or adopt a directory you already have.
-- **Per-account proxy** — a local port, a full proxy URL, `off`, or `inherit`.
-- **One-step deployment** — `install.sh --config accounts.json` installs the tool and creates every account in the file.
-- **Idempotent** — every command can be re-run safely. Unchanged state is reported as `unchanged`; conflicts with files multi-codex does not own are reported without changing anything; an interrupted migration resumes where it stopped.
-- **Optional shared resources** — link `AGENTS.md`, `skills`, `rules`, `agents` and so on from one shared directory into selected accounts.
-- **See who is logged in and how much quota is left** — `list` shows each account's email and plan; `usage` shows the 5-hour / weekly usage from local session logs, or live with `--live`.
-- **Health check** — `doctor` checks the installation, environment and accounts, and tells you which command fixes each problem.
-- **Everyday helpers** — shell completion (bash, zsh, fish), `run` any command with an account's environment, per-account environment variables, and `use` / `restore` to switch or undo the default account.
+## Install
 
-## Requirements
-
-- macOS or Linux (Windows is planned; inside WSL, use the Linux instructions)
-- Python 3.8 or newer (standard library only)
-- Codex CLI on your `PATH`
-
-## Installation
-
-From a clone:
-
-```sh
-git clone https://github.com/jakoes-wu/multi-codex.git
-cd multi-codex
-./install.sh
-```
-
-Or directly:
+You need macOS or Linux (on Windows, use WSL), Python 3.8 or newer (no extra packages) and the Codex CLI on your `PATH`.
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/jakoes-wu/multi-codex/main/install.sh | sh
+multi-codex --version
 ```
 
-The tool goes to `~/.local/share/multi-codex` and the `multi-codex` command to `~/.local/bin`. Use `--prefix DIR` to install somewhere else. Make sure `~/.local/bin` is on your `PATH`; the installer only prints a hint and never edits your shell profile.
+The `multi-codex` command goes to `~/.local/bin`. If your shell says `command not found`, that directory is not on your `PATH` yet; the installer prints a hint but never edits your shell profile. Add this line to `~/.zshrc` or `~/.bashrc` and open a new terminal:
 
-Alternatively: `pipx install git+https://github.com/jakoes-wu/multi-codex`.
+```sh
+export PATH="$HOME/.local/bin:$PATH"
+```
 
-From v0.5.0 on, every release publishes `multi-codex-<tag>.tar.gz` and `SHA256SUMS`. The remote installer downloads that archive and checks its SHA-256 before installing anything; a mismatch stops the installation. Branches and older releases are installed unverified (the installer says so); set `MULTI_CODEX_REQUIRE_CHECKSUM=1` to refuse them. The checksum is published next to the archive, so it protects against a damaged or altered download, not against a compromised GitHub account.
-
-Run `./install.sh --help` for all options.
+Installing from a clone, with pipx or into another directory, and how downloads are verified: see [More installation options](#more-installation-options).
 
 ## Quick start
 
+### 1. Create one account per login
+
 ```sh
-# Turn the existing ~/.codex into an account named "main"
-multi-codex migrate-default main
-
-# Add a second account that goes through a local proxy on port 7901
-multi-codex add work --proxy 7901
-
-# Log in once per account, then use it
-codex-work login
-codex-work
-
-multi-codex list
+multi-codex add work
+multi-codex add personal
 ```
+
+Each command creates a directory (`~/.cx/work`) and a launcher (`codex-work`). A name may contain letters, digits and `._@+-`; an e-mail address works too.
+
+If an account should go through a proxy, give it a local port or a URL, for example `multi-codex add work --proxy 7901` (the same as `http://127.0.0.1:7901`). See [Proxy values](#proxy-values).
+
+### 2. Log in once per account
+
+```sh
+codex-work login
+codex-personal login
+```
+
+### 3. Use the launchers instead of `codex`
+
+```sh
+codex-work                 # all arguments are passed to codex
+codex-personal resume
+```
+
+### 4. Check that everything is right
+
+```sh
+multi-codex list      # accounts, launcher state, logged-in e-mail and plan
+multi-codex usage     # 5-hour and weekly usage of each account
+multi-codex doctor    # finds problems and prints the command that fixes each one
+```
+
+### Already using Codex? Keep your current login
+
+Your existing `~/.codex` can become an account as well, so you do not have to log in again:
+
+```sh
+# Close Codex first: terminals, VS Code, the desktop app
+multi-codex migrate-default main
+```
+
+This moves `~/.codex` to `~/.cx/main`, leaves a link at `~/.codex` and creates `codex-main`. Plain `codex`, VS Code and the desktop app keep working as before. Later, `multi-codex use work` makes another account the default. If Codex keeps your login in the system keyring, the command stops and explains why. Details and how to undo it: [Migrating `~/.codex`](#migrating-codex).
+
+## Common tasks
+
+| I want to | Command | Details |
+| ---- | ---- | ---- |
+| Open VS Code with an account | `multi-codex code work ~/src/project` | [VS Code and the desktop app](#vs-code-and-the-desktop-app-experimental) |
+| Open the desktop app with an account (macOS) | `multi-codex app work` | [VS Code and the desktop app](#vs-code-and-the-desktop-app-experimental) |
+| Change the account that plain `codex` and the Dock apps use | `multi-codex use work` | [Default account](#default-account) |
+| Always use one account inside a project | In the project directory: `multi-codex bind work`, then `multi-codex run` | [Directory bindings](#directory-bindings) |
+| Set or change an account's proxy | `multi-codex proxy work 7901` | [Proxy values](#proxy-values) |
+| Share `AGENTS.md`, skills and rules between accounts | `multi-codex init --shared-dir ~/.codex-shared`, then `multi-codex add work --shared` | [Shared resources](#shared-resources) |
+| Start a new account with another account's settings | `multi-codex add new --config-from work` | [Copying settings](#copying-settings-from-another-account) |
+| Give an account extra environment variables | `multi-codex env work KEY=VALUE` | [Environment variables](#per-account-environment-variables) |
+| Set up all accounts on a new machine | `./install.sh --config accounts.json` | [Declarative setup](#declarative-setup-with-apply) |
+| Get tab completion | `eval "$(multi-codex completion zsh)"` | [Shell completion](#shell-completion) |
+| See what a command would change | add `--dry-run` | [Commands](#commands) |
+| Remove an account | `multi-codex remove work` (the directory is kept) | [Commands](#commands) |
+
+More questions are answered in the [FAQ](#faq).
+
+## Good to know
+
+- **Safe to re-run.** Every command can be run again; state that is already right is reported as `unchanged`.
+- **Never overwrites your files.** If a file that multi-codex did not create is in the way, it reports a conflict and changes nothing.
+- **Interrupted migrations resume.** Run the same command again and it continues from the actual state on disk.
+- **Not a security boundary.** Separate directories keep the accounts' local state apart, but any program running as your user can read every account directory.
 
 ## Commands
 
@@ -349,6 +390,22 @@ multi-codex --version
 | 2 | Invalid command-line arguments |
 | 3 | Conflict with files multi-codex does not own; `migrate-default` or `restore` refused because credentials are in the system keyring; `use` / `restore` found `~/.codex` in an unexpected state or on another file system. Nothing was changed |
 | 4 | The directory to migrate, switch away from or restore is in use |
+
+## More installation options
+
+From a clone:
+
+```sh
+git clone https://github.com/jakoes-wu/multi-codex.git
+cd multi-codex
+./install.sh
+```
+
+With pipx: `pipx install git+https://github.com/jakoes-wu/multi-codex`.
+
+The tool goes to `~/.local/share/multi-codex` and the `multi-codex` command to `~/.local/bin`. Use `--prefix DIR` to install somewhere else. Run `./install.sh --help` for all options.
+
+**Verified downloads.** From v0.5.0 on, every release publishes `multi-codex-<tag>.tar.gz` and `SHA256SUMS`. The remote installer downloads that archive and checks its SHA-256 before installing anything; a mismatch stops the installation. Branches and older releases are installed unverified (the installer says so); set `MULTI_CODEX_REQUIRE_CHECKSUM=1` to refuse them. The checksum is published next to the archive, so it protects against a damaged or altered download, not against a compromised GitHub account.
 
 ## Uninstalling
 
