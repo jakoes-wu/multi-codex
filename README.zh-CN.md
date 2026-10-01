@@ -2,9 +2,17 @@
 
 [English](README.md) | **简体中文**
 
-在同一台机器上同时使用多个 [Codex CLI](https://github.com/openai/codex) 账号。
+在同一台机器上同时使用多个 [Codex CLI](https://github.com/openai/codex) 账号。每个账号有自己的登录、配置和历史记录，还可以有自己的代理；不用再反复退出、重新登录。
 
-Codex 把配置、凭据和会话数据库存放在 `CODEX_HOME` 指定的目录里（默认 `~/.codex`）。multi-codex 为每个账号准备独立的目录和独立的启动命令，每个账号还可以单独设置代理：
+```sh
+codex-work          # 用工作账号登录的 Codex
+codex-personal      # 另开一个终端，用个人账号登录的 Codex
+multi-codex list    # 查看每个账号登录的是谁
+```
+
+## 工作原理
+
+Codex 把所有东西（配置、凭据、会话）放在一个目录里，这个目录由 `CODEX_HOME` 指定，默认是 `~/.codex`。multi-codex 为每个账号准备一个独立目录，再生成一个小小的启动命令 `codex-<名称>`，用这个目录启动 Codex：
 
 ```text
 codex-work       -> CODEX_HOME=~/.cx/work       HTTPS_PROXY=http://127.0.0.1:7901
@@ -12,68 +20,98 @@ codex-personal   -> CODEX_HOME=~/.cx/personal   （沿用 shell 里的代理设�
 codex            -> ~/.codex，它本身也可以迁移成其中一个账号
 ```
 
-## 功能
-
-- **迁移默认目录**：把现有的 `~/.codex` 变成一个具名账号，原位置留兼容软链。直接执行 `codex`、以及历史记录里的旧绝对路径都照常可用。
-- **新增账号**：创建账号目录和 `codex-<名称>` 启动命令；也可以把已有目录登记为账号。
-- **每个账号单独设置代理**：可以是本地端口、完整代理 URL、`off` 或 `inherit`。
-- **一键部署**：`install.sh --config accounts.json` 一条命令装好工具，并建好文件里描述的全部账号。
-- **幂等**：
-  - 每条命令都可以重复执行；已处于目标状态时输出 `unchanged`；
-  - 遇到不归本工具管理的文件时报告冲突，不做任何修改；
-  - 迁移被中断后，重跑会从中断处继续。
-- **可选的共享资源**：把 `AGENTS.md`、`skills`、`rules`、`agents` 等从同一个共享目录软链到指定账号。
-- **看得到登录身份和剩余额度**：`list` 显示每个账号登录的邮箱和套餐；`usage` 从本地会话记录显示 5 小时和每周额度，加 `--live` 时查询实时额度。
-- **体检**：`doctor` 检查安装、环境和各账号，并给出修复每个问题的命令。
-- **日常辅助**：
-  - shell 补全（bash、zsh、fish）；
-  - 用 `run` 在某个账号的环境下运行任意命令；
-  - 每个账号的额外环境变量；
-  - 用 `use` 切换默认账号、用 `restore` 撤销迁移。
-
-## 环境要求
-
-- macOS 或 Linux（Windows 支持在计划中；WSL 内按 Linux 使用）
-- Python 3.8 及以上（只用标准库）
-- `PATH` 中能找到 Codex CLI
+启动命令是普通的 shell 脚本，即使卸载了 multi-codex 也照常可用。
 
 ## 安装
 
-在克隆的仓库里安装：
-
-```sh
-git clone https://github.com/jakoes-wu/multi-codex.git
-cd multi-codex
-./install.sh
-```
-
-或直接远程安装：
+需要 macOS 或 Linux（Windows 支持在计划中；WSL 内按 Linux 使用）、Python 3.8 及以上（不需要额外的包）、`tar`、`curl` 或 `wget`，并且 `PATH` 中能找到 Codex CLI。
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/jakoes-wu/multi-codex/main/install.sh | sh
+multi-codex --version
 ```
 
-- 工具本身装到 `~/.local/share/multi-codex`，`multi-codex` 命令装到 `~/.local/bin`；要换位置，用 `--prefix DIR` 指定。
-- 请确认 `~/.local/bin` 在 `PATH` 中。安装脚本只给出提示，不会修改你的 shell 配置文件。
-- 也可以用 pipx 安装：`pipx install git+https://github.com/jakoes-wu/multi-codex`。
-- **校验**：从 v0.5.0 起，每个 release 都附带 `multi-codex-<tag>.tar.gz` 和 `SHA256SUMS`。远程安装会下载这个包，先校验 SHA-256，不一致就停止安装。安装分支或更早的版本时没有校验，安装脚本会明确提示；设置 `MULTI_CODEX_REQUIRE_CHECKSUM=1` 可以拒绝这种安装。校验和与安装包放在同一个 release 里，只能发现下载过程中的损坏或篡改，不能防范 GitHub 账号本身被攻破。
-- 全部安装选项见 `./install.sh --help`。
+`multi-codex` 命令和各账号的 `codex-<名称>` 启动命令都在 `~/.local/bin`。如果 shell 提示 `command not found`，说明这个目录还不在 `PATH` 中；安装脚本只给出提示，不会修改你的 shell 配置文件。把下面这行加到 `~/.zshrc` 或 `~/.bashrc`，再打开一个新终端：
+
+```sh
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+fish 用户改为执行一次 `fish_add_path ~/.local/bin`。
+
+从克隆的仓库安装、用 pipx 安装、装到其它目录，以及下载包如何校验，见“更多安装方式”一节。
 
 ## 快速开始
 
+### 1. 每个登录建一个账号
+
 ```sh
-# 把现有的 ~/.codex 迁移成名为 main 的账号
-multi-codex migrate-default main
-
-# 新增一个账号，经本地 7901 端口的代理访问
-multi-codex add work --proxy 7901
-
-# 每个账号登录一次，然后就可以使用
-codex-work login
-codex-work
-
-multi-codex list
+multi-codex add work
+multi-codex add personal
 ```
+
+每条命令会创建一个目录（`~/.cx/work`）和一个启动命令（`codex-work`）。名称以字母或数字开头，可以包含字母、数字和 `._@+-`，也可以直接用邮箱。
+
+某个账号需要走代理时，给它一个本地端口或代理 URL，例如 `multi-codex add work --proxy 7901`（等同于 `http://127.0.0.1:7901`），见“代理取值”一节。
+
+### 2. 每个账号登录一次
+
+```sh
+codex-work login
+codex-personal login
+```
+
+### 3. 用启动命令代替 `codex`
+
+```sh
+codex-work                 # 所有参数都原样传给 codex
+codex-personal resume
+```
+
+### 4. 检查是否一切正常
+
+```sh
+multi-codex list      # 账号、启动命令的状态、登录的邮箱和套餐
+multi-codex usage     # 5 小时和每周额度用量；账号用过之后才有数据，--live 可立即查询
+multi-codex doctor    # 找出问题，并给出修复每个问题的命令
+```
+
+### 已经在用 Codex？保留现在的登录
+
+现有的 `~/.codex` 也可以变成一个账号，不用重新登录：
+
+```sh
+# 先关掉 Codex：终端里的会话、VS Code、桌面端
+multi-codex migrate-default main
+```
+
+这条命令把 `~/.codex` 移到 `~/.cx/main`，在 `~/.codex` 留一个软链，并创建 `codex-main`。直接运行的 `codex`、VS Code、桌面端，以及指向 `~/.codex` 下的旧绝对路径都照常可用。以后用 `multi-codex use work` 就能把默认账号换成别的账号。如果 Codex 把登录信息存在系统钥匙串里，命令会停下并说明原因。细节和撤销方法见“迁移 `~/.codex`”一节。
+
+## 常用操作速查
+
+| 我想 | 命令 | 详见 |
+| ---- | ---- | ---- |
+| 用某个账号打开 VS Code | `multi-codex code work ~/src/project` | 按账号打开 VS Code 与桌面端 |
+| 用某个账号打开桌面端（macOS） | `multi-codex app work` | 按账号打开 VS Code 与桌面端 |
+| 换掉直接运行 `codex` 和从 Dock 启动时用的账号 | `multi-codex use work`（需先 `migrate-default`） | 默认账号 |
+| 在某个项目里固定使用一个账号 | 在项目目录执行 `multi-codex bind work`，之后用 `multi-codex run` | 目录绑定账号 |
+| 设置或修改账号的代理 | `multi-codex proxy work 7901` | 代理取值 |
+| 在账号之间共享 `AGENTS.md`、skills、rules | 把要共享的内容放进 `~/.codex-shared`，执行 `multi-codex init --shared-dir ~/.codex-shared`，再 `multi-codex add work --shared` | 共享资源 |
+| 新账号沿用另一个账号的配置 | `multi-codex add new --config-from work` | 从另一个账号复制配置 |
+| 给账号加额外的环境变量 | `multi-codex env work KEY=VALUE` | 每个账号的环境变量 |
+| 在新机器上一次建好所有账号 | `curl -fsSL https://raw.githubusercontent.com/jakoes-wu/multi-codex/main/install.sh \| sh -s -- --config accounts.json` | 用 `apply` 声明式部署 |
+| 开启 Tab 补全 | `eval "$(multi-codex completion zsh)"` | shell 补全 |
+| 先看看命令会改什么 | 加 `--dry-run` | 命令 |
+| 删除账号 | `multi-codex remove work`（账号目录会保留） | 命令 |
+
+更多问题见“常见问题”一节。
+
+## 使用前须知
+
+- **可以放心重复执行**：每条命令都能重跑，已经处于目标状态时输出 `unchanged`。
+- **不会覆盖你的文件**：遇到不是 multi-codex 创建的文件挡路时，只报告冲突，不做任何修改。
+- **迁移中断可以续跑**：重跑同一条命令，会按磁盘上的实际状态接着做。
+- **不是安全边界**：分开的目录只是让各账号的本地状态互不干扰，以你的用户身份运行的任何程序都能读取所有账号目录。
 
 ## 命令
 
@@ -342,6 +380,7 @@ multi-codex init --shared-dir ~/.codex-shared --shared-items AGENTS.md,skills,ru
 multi-codex add work --shared
 ```
 
+- 先把要共享的条目放进共享目录：共享目录里没有的条目会被跳过（输出 `skip`），不会建链接。
 - multi-codex 只创建缺少的链接，并记住哪些链接是它自己建的。
 - 关闭共享时，只删除它建的那些链接，你自己建的链接不受影响。
 - 如果你以前手工把某个账号软链到了共享目录，可以用 `multi-codex add 名称 --shared --adopt` 让工具接管这些链接：链接本身不重建，但之后关闭共享时也会被删除。只接管已经指向对应共享条目的链接。
@@ -459,10 +498,27 @@ multi-codex --version
 | 3 | 与不归 multi-codex 管理的文件冲突；`migrate-default` 或 `restore` 因凭据存在系统钥匙串而拒绝；`use` / `restore` 发现 `~/.codex` 状态不对或不在同一个文件系统。没有做任何修改 |
 | 4 | 要迁移、要切走或要移回的目录正被占用 |
 
+## 更多安装方式
+
+从克隆的仓库安装：
+
+```sh
+git clone https://github.com/jakoes-wu/multi-codex.git
+cd multi-codex
+./install.sh
+```
+
+用 pipx 安装：`pipx install git+https://github.com/jakoes-wu/multi-codex`。
+
+工具本身装到 `~/.local/share/multi-codex`，`multi-codex` 命令装到 `~/.local/bin`；要换位置，用 `--prefix DIR` 指定。全部安装选项见 `./install.sh --help`。
+
+**下载校验**：从 v0.5.0 起，每个 release 都附带 `multi-codex-<tag>.tar.gz` 和 `SHA256SUMS`。远程安装会下载这个包，先校验 SHA-256，不一致就停止安装。安装分支或更早的版本时没有校验，安装脚本会明确提示；设置 `MULTI_CODEX_REQUIRE_CHECKSUM=1` 可以拒绝这种安装。校验和与安装包放在同一个 release 里，只能发现下载过程中的损坏或篡改，不能防范 GitHub 账号本身被攻破。
+
 ## 卸载
 
 ```sh
-./install.sh --uninstall
+./install.sh --uninstall                                  # 在克隆的仓库里
+curl -fsSL https://raw.githubusercontent.com/jakoes-wu/multi-codex/main/install.sh | sh -s -- --uninstall    # 没有克隆仓库时
 ```
 
 卸载只删除工具本身，配置、账号目录和 `codex-<名称>` 启动命令都会保留。启动命令不依赖 multi-codex，卸载后仍能继续使用。
