@@ -204,6 +204,7 @@ multi-codex app work                       # 打开一个独立的 Codex 桌面�
 - 通过 `open -n` 启动 `/Applications/ChatGPT.app`（bundle id `com.openai.codex`），`CODEX_HOME` 设为账号目录，使用独立的数据目录 `<root>/.apps/<名称>/desktop`，输出写到同目录下的 `desktop.log`。
 - 桌面端会加载登录 shell 的环境，所以它使用 shell 的代理设置，不使用账号的代理；账号的额外环境变量也不会传过去。
 - 请一次只在一个实例中登录：登录回调使用本机固定的端口。
+- 某个账号的实例运行时，从 Dock、Finder 或用 `open -a` 正常打开桌面端，只会把那个实例切到前台，不会启动默认账号的实例。要同时使用默认账号，请用 `open -n -a /Applications/ChatGPT.app` 启动。
 
 ### 默认账号
 

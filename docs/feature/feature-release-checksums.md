@@ -1,6 +1,7 @@
 # 发布包附 SHA-256 校验和，install.sh 下载后校验（v0.5）
 
-> 2026-10-01 注记：代码已落地（未提交，等待编译机验证）。实现：`.github/workflows/release.yml`；`install.sh` 的下载与校验段。§8 第 1–7 条的用例在 `tests/test_install.py` 的 `ChecksumTest` 中；第 8 条要等 v0.5.0 发布后实际检查。
+> 2026-10-01 注记：代码已落地（未提交，等待编译机验证）。实现：`.github/workflows/release.yml`；`install.sh` 的下载与校验段。§8 第 1–7 条的用例在 `tests/test_install.py` 的 `ChecksumTest` 中。
+> - §8 第 8 条已于 2026-10-01 发布 v0.5.0 后实际核对：发布工作流一次通过（含版本自检）；release 页面有 `multi-codex-v0.5.0.tar.gz`（196738 字节）和 `SHA256SUMS`；`SHA256SUMS`、本地 `shasum -a 256` 与 Python `hashlib` 三者一致（`d01a3835…`）；在临时目录用默认安装命令安装，输出 `verified sha256` 并装出 0.5.0；`MULTI_CODEX_REF=v0.4.0`（没有附件）时走 codeload，提示 `is not verified` 并照常安装。
 >
 > 本文其余部分保持方案原文。
 
