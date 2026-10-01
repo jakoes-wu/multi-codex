@@ -10,7 +10,7 @@ import shutil
 import subprocess
 from typing import List, NamedTuple, Optional, Tuple
 
-from . import accounts, identity, migrate, platform
+from . import accounts, identity, migrate, platform, switch
 from .actions import CONFLICT, CREATE, DELETE, SKIP, UPDATE
 from .config import ConfigError, load_config
 from .fsutil import KIND_DIR, KIND_LINK, KIND_MISSING, entry_kind, expand
@@ -93,7 +93,16 @@ def _check_migration() -> Check:
                      "move the complete data back to the source path, then delete {}".format(migrate.journal_path()))
     if notice:
         return Check("migration", FAIL, notice, "rerun the same `multi-codex migrate-default` command")
-    return Check("migration", OK, "no unfinished migration")
+    # restore 做到一半同样会拦下其它写命令，这里一并报告。
+    try:
+        restore = switch.load_restore_journal()
+    except switch.RestoreJournalError as exc:
+        return Check("migration", FAIL, str(exc), "check ~/.codex and the account directory, then delete {}".format(
+            switch.restore_journal_path()))
+    if restore:
+        return Check("migration", FAIL, "unfinished restore of {}".format(restore["name"]),
+                     "multi-codex restore {}".format(restore["name"]))
+    return Check("migration", OK, "no unfinished migration or restore")
 
 
 def _check_path(bin_dir: str) -> Check:
@@ -113,14 +122,16 @@ def _check_env() -> Check:
 
 
 def _check_default_dir(config) -> Check:
+    # default_source() 返回字面量 "~/.codex"，必须先展开；输出里仍用短写法 source 方便阅读。
     source = platform.default_source()
-    kind = entry_kind(source)
+    path = expand(source)
+    kind = entry_kind(path)
     if kind == KIND_MISSING:
         return Check("default-dir", OK, "{} does not exist".format(source))
     if kind == KIND_DIR:
         return Check("default-dir", OK, "{} is a real directory (not migrated)".format(source))
     if kind == KIND_LINK:
-        real = os.path.realpath(source)
+        real = os.path.realpath(path)
         for name in config.accounts:
             if os.path.realpath(accounts.account_dir(config, name)) == real:
                 return Check("default-dir", OK, "{} links to account {}".format(source, name))

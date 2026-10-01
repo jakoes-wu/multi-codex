@@ -134,8 +134,10 @@ class IdentityTest(InsightBase):
         self.add("work")
         result = self.ok("list")
         lines = result.out.splitlines()
-        self.assertEqual(lines[3].split()[:5], ["NAME", "DIR", "PROXY", "SHARED", "LAUNCHER"])
-        self.assertEqual(lines[4].split()[:5], ["work", "ok", "inherit", "no", "ok"])
+        # 表头之前的说明行在 v0.4 多了一行 default:，按内容定位表头。
+        header = next(index for index, line in enumerate(lines) if line.startswith("NAME"))
+        self.assertEqual(lines[header].split()[:5], ["NAME", "DIR", "PROXY", "SHARED", "LAUNCHER"])
+        self.assertEqual(lines[header + 1].split()[:5], ["work", "ok", "inherit", "no", "ok"])
 
     def test_system_config_keyring(self):
         self.add("work")
@@ -435,6 +437,26 @@ class DoctorTest(InsightBase):
         self.assertEqual(checks["account:none"]["hint"], "codex-none login")
         self.assertEqual(checks["account:gone"]["status"], "fail")
         self.assertEqual(result.code, 1, result)
+
+    def test_default_dir_states(self):
+        # fix-doctor-default-dir：~ 必须展开；修复前第 1-3 种状态都会被误报为“不存在”。
+        self.add("work")
+        link = os.path.join(self.home, ".codex")
+        os.symlink(self.account_dir("work"), link)
+        checks, _, _ = self.doctor()
+        self.assertEqual(checks["default-dir"]["status"], "ok")
+        self.assertIn("links to account work", checks["default-dir"]["message"])
+        os.unlink(link)
+        os.symlink(self.tmp, link)
+        checks, _, _ = self.doctor()
+        self.assertEqual(checks["default-dir"]["status"], "warn")
+        os.unlink(link)
+        os.makedirs(link)
+        checks, _, _ = self.doctor()
+        self.assertIn("not migrated", checks["default-dir"]["message"])
+        os.rmdir(link)
+        checks, _, _ = self.doctor()
+        self.assertIn("does not exist", checks["default-dir"]["message"])
 
     def test_unconfigured(self):
         checks, _, result = self.doctor()

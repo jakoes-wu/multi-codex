@@ -9,12 +9,12 @@ import json
 import os
 import sys
 import time
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
-from . import __version__, accounts, doctor, identity, launcher, migrate, platform, usage
+from . import __version__, accounts, completion, doctor, identity, launcher, migrate, platform, switch, usage
 from .actions import error, info, warn
 from .config import (DEFAULT_SHARED_ITEMS, Account, Config, ConfigError, is_socks, load_config, normalize_proxy,
-                     parse_config, validate_name)
+                     parse_config, validate_env_key, validate_env_value, validate_name)
 from .fsutil import expand
 from .lock import LockBusyError, WriteLock
 
@@ -95,6 +95,40 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_doctor = sub.add_parser("doctor", help="check the installation, configuration and accounts (read-only)")
     _add_json(p_doctor)
+
+    p_comp = sub.add_parser("completion", help="print a shell completion script")
+    p_comp.add_argument("shell", nargs="?", choices=completion.SHELLS)
+    # 补全脚本在按 Tab 时调用它读取账号名；不是给人用的，所以不出现在帮助里。
+    p_comp.add_argument("--list-accounts", action="store_true", help=argparse.SUPPRESS)
+
+    p_run = sub.add_parser("run", help="run a command with an account's environment (default: codex)",
+                           usage="multi-codex run NAME [-- COMMAND [ARG ...]]")
+    p_run.add_argument("name")
+
+    p_path = sub.add_parser("path", help="print an account's directory")
+    p_path.add_argument("name")
+
+    p_env = sub.add_parser("env", help="list or change an account's extra environment variables")
+    p_env.add_argument("name")
+    p_env.add_argument("assignments", nargs="*", metavar="KEY=VALUE", help="variables to set")
+    p_env.add_argument("--unset", action="append", default=[], metavar="KEY", help="variable to remove")
+    p_env.add_argument("--clear", action="store_true", help="remove all variables of the account")
+    _add_dry_run(p_env)
+
+    p_use = sub.add_parser("use", help="show or change the default account (what ~/.codex points to)")
+    p_use.add_argument("name", nargs="?")
+    p_use.add_argument("--skip-process-check", action="store_true",
+                       help="switch even if a process may be using the current default account")
+    _add_dry_run(p_use)
+
+    p_restore = sub.add_parser("restore", help="undo migrate-default: move an account back to ~/.codex")
+    p_restore.add_argument("name")
+    p_restore.add_argument("--skip-process-check", action="store_true",
+                           help="do not check whether the account directory is in use")
+    p_restore.add_argument("--accept-relogin", action="store_true",
+                           help="restore even though credentials are in the system keyring; "
+                                "you will need to log in again afterwards")
+    _add_dry_run(p_restore)
     return parser
 
 
@@ -117,8 +151,21 @@ def _add_dry_run(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--dry-run", action="store_true", help="show the planned actions without changing anything")
 
 
+def _split_run_command(argv: List[str]) -> Tuple[List[str], List[str]]:
+    """`run NAME -- CMD ...`：在第一个 `--` 处分开，`--` 之后原样作为要运行的命令。
+
+    不交给 argparse 的 REMAINDER：不同 Python 版本对 `--` 的处理不一致（3.9 起会吞掉第一个 `--`），
+    `run a -- -- x` 这种命令就会被解析成不同的样子。
+    """
+    if argv[:1] == ["run"] and "--" in argv:
+        index = argv.index("--")
+        return argv[:index], argv[index + 1:]
+    return argv, []
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     parser = build_parser()
+    argv, run_command = _split_run_command(list(sys.argv[1:] if argv is None else argv))
     try:
         args = parser.parse_args(argv)
     except SystemExit as exc:
@@ -135,15 +182,29 @@ def main(argv: Optional[List[str]] = None) -> int:
             return cmd_usage(args)
         if args.command == "doctor":
             return cmd_doctor(args)
+        if args.command == "completion":
+            return cmd_completion(args, parser)
+        if args.command == "run":
+            return cmd_run(args.name, run_command)
+        if args.command == "path":
+            return cmd_path(args.name)
         notice = migrate.pending_journal_notice()
         if notice:
             warn(notice)
+        restore_notice = switch.pending_restore_notice()
+        if restore_notice:
+            warn(restore_notice)
         if args.command == "list":
             return cmd_list(args.json)
+        # 以下两种只读模式不加锁，未完成的迁移或 restore 也不拦。
+        if args.command == "env" and not (args.assignments or args.unset or args.clear):
+            return cmd_env_list(args.name)
+        if args.command == "use" and args.name is None:
+            return cmd_use_show()
         if _blocked_by_migration(args, notice):
             return accounts.EXIT_ERROR
         with WriteLock():
-            # 加锁前的检查与加锁之间，另一条命令可能刚开始一次迁移，拿到锁后再确认一次。
+            # 加锁前的检查与加锁之间，另一条命令可能刚开始一次迁移或 restore，拿到锁后再确认一次。
             if _blocked_by_migration(args, migrate.pending_journal_notice()):
                 return accounts.EXIT_ERROR
             return dispatch(args)
@@ -152,6 +213,10 @@ def main(argv: Optional[List[str]] = None) -> int:
               "the target account directory, or a *.multi-codex-bak.* backup next to the source), "
               "make sure it is back at the source path, then delete the journal file".format(exc),
               phase="resume")
+        return accounts.EXIT_ERROR
+    except switch.RestoreJournalError as exc:
+        error("{}. Check whether the account data is at ~/.codex or in the account directory, "
+              "then delete the marker file".format(exc), phase="restore")
         return accounts.EXIT_ERROR
     except LockBusyError as exc:
         error("another multi-codex command is running (pid {})".format(exc.holder_pid or "unknown"))
@@ -171,6 +236,13 @@ def _blocked_by_migration(args: argparse.Namespace, notice: Optional[str]) -> bo
     # 迁移中途禁止其它写命令，防止根目录或账号在迁移过程中被改动。
     if notice and args.command != "migrate-default" and not args.dry_run:
         error("finish the unfinished migration before running `{}`".format(args.command))
+        return True
+    # restore 做到一半时 ~/.codex 可能不存在或是普通目录，这时 use 会新建它、migrate-default 的预检也能通过，
+    # restore 就再也无法完成。每次都重新读取标记：拿到锁之后的第二次检查也要看到别的命令刚写出的标记。
+    journal = switch.load_restore_journal()
+    if journal and not args.dry_run and not (
+            args.command == "restore" and args.name.casefold() == journal["name"].casefold()):
+        error("finish the unfinished restore first: rerun `multi-codex restore {}`".format(journal["name"]))
         return True
     return False
 
@@ -233,9 +305,51 @@ def dispatch(args: argparse.Namespace) -> int:
         orphan_scope = accounts.ALL_ORPHANS
         if args.file:
             new = _load_apply_file(args.file, old)
+    elif args.command == "env":
+        name = _checked_name(args.name)
+        account = new.find(name)
+        if account is None:
+            error("account {!r} is not registered".format(name))
+            return accounts.EXIT_ERROR
+        _apply_env_changes(account, args)
+    elif args.command == "use":
+        return switch.use_account(old, _checked_name(args.name), args.skip_process_check, args.dry_run)
+    elif args.command == "restore":
+        return switch.restore_account(old, exists, _checked_name(args.name), args.skip_process_check,
+                                      args.accept_relogin, args.dry_run)
 
     return accounts.converge(old, new, config_exists=exists, dry_run=args.dry_run,
                              orphan_scope=orphan_scope, adopt_accounts=adopt_accounts)
+
+
+def _apply_env_changes(account: Account, args: argparse.Namespace) -> None:
+    """按命令行参数修改账号的环境变量；参数不合法时抛 UsageError（退出码 2），什么都不改。"""
+    if args.clear and (args.assignments or args.unset):
+        raise UsageError("--clear cannot be combined with KEY=VALUE or --unset")
+    updates = {}
+    for assignment in args.assignments:
+        if "=" not in assignment:
+            raise UsageError("expected KEY=VALUE, got {!r}".format(assignment))
+        key, value = assignment.split("=", 1)
+        try:
+            validate_env_key(key)
+            validate_env_value(value)
+        except ValueError as exc:
+            raise UsageError(str(exc))
+        updates[key] = value
+    for key in args.unset:
+        try:
+            validate_env_key(key)
+        except ValueError as exc:
+            raise UsageError(str(exc))
+        if key in updates:
+            raise UsageError("{} is both set and unset in the same command".format(key))
+    if args.clear:
+        account.env = {}
+        return
+    account.env.update(updates)
+    for key in args.unset:
+        account.env.pop(key, None)
 
 
 def _load_apply_file(path: str, old: Config) -> Config:
@@ -313,6 +427,7 @@ def cmd_list(as_json: bool = False) -> int:
             "root": expand(config.root),
             "bin_dir": expand(config.bin_dir),
             "shared_dir": expand(config.shared_dir) if config.shared_dir else None,
+            "default_account": switch.describe_default(config)[0],
             "accounts": [{
                 "name": name,
                 "dir": directory,
@@ -321,6 +436,8 @@ def cmd_list(as_json: bool = False) -> int:
                 "shared": account.shared,
                 "launcher": accounts.launcher_status(config, name),
                 "credentials_store": found.store if found else None,
+                # 只给键名：值里可能有密钥。
+                "env_keys": sorted(account.env),
                 "login": {"type": found.login if found else identity.LOGIN_LOGGED_OUT,
                           "email": found.email if found else None,
                           "plan": found.plan if found else None},
@@ -333,6 +450,7 @@ def cmd_list(as_json: bool = False) -> int:
     print("root: {}".format(expand(config.root)))
     print("bin_dir: {}".format(expand(config.bin_dir)))
     print("shared.dir: {}".format(expand(config.shared_dir) if config.shared_dir else "(not set)"))
+    print("default: {}".format(switch.describe_default(config)[1]))
     if not config.accounts:
         print("no accounts registered")
         return accounts.EXIT_OK
@@ -407,6 +525,74 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         for line in doctor.format_checks(checks):
             print(line)
     return accounts.EXIT_ERROR if any(check.status == doctor.FAIL for check in checks) else accounts.EXIT_OK
+
+
+def cmd_completion(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
+    if args.list_accounts:
+        # 补全时每按一次 Tab 调用一次：任何问题都静默，不能在用户的命令行上打出警告。
+        try:
+            config, _ = load_config()
+        except (ConfigError, OSError):
+            return accounts.EXIT_OK
+        for name in config.accounts:
+            print(name)
+        return accounts.EXIT_OK
+    if args.shell is None:
+        raise UsageError("completion needs a shell: bash, zsh or fish")
+    sys.stdout.write(completion.script(args.shell, parser))
+    return accounts.EXIT_OK
+
+
+def cmd_run(name: str, command: List[str]) -> int:
+    """在账号的环境下运行命令（默认 codex），成功时不返回：本进程被替换成 sh，再被替换成该命令。
+
+    环境由 launcher.render 生成的脚本设置，与启动命令逐字一致。脚本经环境变量交给 sh，
+    不放进命令行参数：里面可能有账号环境变量里的密钥，命令行参数其它用户用 ps 就能看到。
+    """
+    config, exists = load_config()
+    account = config.find(name) if exists else None
+    if account is None:
+        error("account {!r} is not registered".format(name))
+        return accounts.EXIT_ERROR
+    script = launcher.render(account.name, accounts.account_dir(config, account.name), account.proxy,
+                             account.env, command_mode=True)
+    env = dict(os.environ)
+    env[launcher.RUN_SCRIPT_ENV] = script
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os.execve("/bin/sh", ["sh", "-c", 'eval "${}"'.format(launcher.RUN_SCRIPT_ENV), "sh"] + (command or ["codex"]),
+              env)
+    return accounts.EXIT_ERROR  # 不会执行到这里；execve 失败时抛 OSError，由 main 统一处理
+
+
+def cmd_path(name: str) -> int:
+    config, exists = load_config()
+    account = config.find(name) if exists else None
+    if account is None:
+        error("account {!r} is not registered".format(name))
+        return accounts.EXIT_ERROR
+    directory = accounts.account_dir(config, account.name)
+    print(directory)
+    if not os.path.isdir(directory):
+        warn("account directory does not exist: {}".format(directory))
+    return accounts.EXIT_OK
+
+
+def cmd_env_list(name: str) -> int:
+    config, exists = load_config()
+    account = config.find(name) if exists else None
+    if account is None:
+        error("account {!r} is not registered".format(name))
+        return accounts.EXIT_ERROR
+    for key in sorted(account.env):
+        print("{}={}".format(key, account.env[key]))
+    return accounts.EXIT_OK
+
+
+def cmd_use_show() -> int:
+    config, _ = load_config()
+    print(switch.describe_default(config)[1])
+    return accounts.EXIT_OK
 
 
 if __name__ == "__main__":

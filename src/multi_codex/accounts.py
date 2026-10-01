@@ -12,13 +12,13 @@
 """
 
 import os
-from typing import FrozenSet, Iterable, List, Optional, Set, Union
+from typing import Dict, FrozenSet, Iterable, List, Optional, Set, Union
 
 from . import launcher, shared
 from .actions import (CONFLICT, CREATE, DELETE, SKIP, UNCHANGED, UPDATE, Action, error,
                       has_conflict, info, print_action)
 from .config import Config, config_path, dump_config, save_config
-from .fsutil import KIND_DIR, KIND_MISSING, atomic_write, entry_kind, expand, read_text
+from .fsutil import KIND_DIR, KIND_MISSING, atomic_write, entry_kind, expand
 
 EXIT_OK = 0
 EXIT_ERROR = 1
@@ -69,7 +69,7 @@ def plan(old: Config, new: Config, *, config_exists: bool = True,
             continue
         directory = os.path.join(new_root, account.name)
         actions.extend(_plan_account_dir(directory, assumed))
-        actions.extend(_plan_launcher(new_bin, account.name, directory, account.proxy))
+        actions.extend(_plan_launcher(new_bin, account.name, directory, account.proxy, account.env))
         if old_account is not None and old_bin != new_bin:
             actions.extend(_plan_launcher_delete(old_bin, old_account.name, planned_deletes,
                                                  "bin_dir changed"))
@@ -118,25 +118,27 @@ def _make_private_dir(directory: str) -> None:
     os.chmod(directory, 0o700)
 
 
-def _plan_launcher(bin_dir: str, name: str, directory: str, proxy: str) -> List[Action]:
+def _plan_launcher(bin_dir: str, name: str, directory: str, proxy: str,
+                   env: Optional[Dict[str, str]] = None) -> List[Action]:
     path = launcher.launcher_path(bin_dir, name)
-    content = launcher.render(name, directory, proxy)
+    content = launcher.render(name, directory, proxy, env)
+    mode = launcher.launcher_mode(env)
     kind = entry_kind(path)
     if kind == KIND_MISSING:
-        return [Action(CREATE, "launcher", path, run=_write_launcher(path, content))]
+        return [Action(CREATE, "launcher", path, run=_write_launcher(path, content, mode))]
     owner = launcher.managed_account(path)
     if owner is None:
         return [Action(CONFLICT, "launcher", path, "already exists and is not managed by multi-codex")]
     if owner.casefold() != name.casefold():
         return [Action(CONFLICT, "launcher", path, "managed by multi-codex for account {!r}".format(owner))]
-    if read_text(path) == content and os.access(path, os.X_OK):
+    if launcher.launcher_file_ok(path, content, env):
         return [Action(UNCHANGED, "launcher", path)]
-    return [Action(UPDATE, "launcher", path, run=_write_launcher(path, content))]
+    return [Action(UPDATE, "launcher", path, run=_write_launcher(path, content, mode))]
 
 
-def _write_launcher(path: str, content: str):
+def _write_launcher(path: str, content: str, mode: int):
     def run() -> None:
-        atomic_write(path, content, mode=launcher.LAUNCHER_MODE)
+        atomic_write(path, content, mode=mode)
     return run
 
 
@@ -198,5 +200,6 @@ def launcher_status(config: Config, name: str) -> str:
     owner = launcher.managed_account(path)
     if owner is None or owner.casefold() != name.casefold():
         return "conflict"
-    expected = launcher.render(name, account_dir(config, name), account.proxy if account else "inherit")
-    return "ok" if read_text(path) == expected and os.access(path, os.X_OK) else "stale"
+    env = account.env if account else {}
+    expected = launcher.render(name, account_dir(config, name), account.proxy if account else "inherit", env)
+    return "ok" if launcher.launcher_file_ok(path, expected, env) else "stale"

@@ -22,6 +22,7 @@ codex            -> ~/.codex, which can itself become one of the accounts
 - **Optional shared resources** — link `AGENTS.md`, `skills`, `rules`, `agents` and so on from one shared directory into selected accounts.
 - **See who is logged in and how much quota is left** — `list` shows each account's email and plan; `usage` shows the 5-hour / weekly usage from local session logs, or live with `--live`.
 - **Health check** — `doctor` checks the installation, environment and accounts, and tells you which command fixes each problem.
+- **Everyday helpers** — shell completion (bash, zsh, fish), `run` any command with an account's environment, per-account environment variables, and `use` / `restore` to switch or undo the default account.
 
 ## Requirements
 
@@ -80,6 +81,12 @@ multi-codex list
 | `multi-codex list [--json]` | Show accounts, the state of their launchers, and who is logged in. |
 | `multi-codex usage [NAME ...] [--live] [--timeout SEC] [--json]` | Show rate-limit usage. |
 | `multi-codex doctor [--json]` | Check the installation, configuration and accounts. Read-only. |
+| `multi-codex run NAME [-- COMMAND ...]` | Run a command (default: `codex`) with an account's environment. |
+| `multi-codex path NAME` | Print an account's directory. |
+| `multi-codex env NAME [KEY=VALUE ...] [--unset KEY] [--clear]` | List or change an account's extra environment variables. |
+| `multi-codex use [NAME] [--skip-process-check]` | Show or change the default account (where `~/.codex` points). |
+| `multi-codex restore NAME [--skip-process-check] [--accept-relogin]` | Undo `migrate-default`: move the account back to `~/.codex`. |
+| `multi-codex completion bash\|zsh\|fish` | Print a shell completion script. |
 
 Every write command accepts `--dry-run`. `list`, `usage` and `doctor` never change anything; with `--json` they print a single JSON object on stdout (with a `"version": 1` field) and keep warnings on stderr. Use `--json` in scripts: the table layout is not guaranteed to stay the same.
 
@@ -94,6 +101,39 @@ Every write command accepts `--dry-run`. `list`, `usage` and `doctor` never chan
 ### Health check
 
 `multi-codex doctor` prints one line per check (`ok`, `warn` or `fail`) and a `fix:` line with the command to run. It checks the `codex` executable and its version, the configuration, unfinished migrations, whether `bin_dir` is on `PATH`, environment variables that break isolation, where `~/.codex` points, whether the files match the configuration (the same plan `apply` would execute), each account's login, and duplicate logins. It does not repair anything and does not use the network. The exit code is 1 if any check fails, otherwise 0.
+
+### Shell completion
+
+```sh
+eval "$(multi-codex completion bash)"     # in ~/.bashrc
+eval "$(multi-codex completion zsh)"      # in ~/.zshrc, after compinit
+multi-codex completion fish | source      # in ~/.config/fish/config.fish
+```
+
+Subcommands, options and registered account names (including e-mail addresses) are completed.
+
+### Running other commands
+
+`multi-codex run NAME -- COMMAND ...` runs any command with exactly the environment of `codex-NAME` (`CODEX_HOME`, proxy, extra variables). Without a command it runs `codex`. Everything after the first `--` is passed through unchanged; the exit code is the command's. `multi-codex path NAME` prints the account directory.
+
+### Per-account environment variables
+
+```sh
+multi-codex env work OPENAI_BASE_URL=https://example.com/v1 TERM_PROGRAM=vscode
+multi-codex env work                      # list
+multi-codex env work --unset TERM_PROGRAM
+multi-codex env work --clear
+```
+
+The variables are stored in `config.json` (`accounts.<name>.env`) and written into the launcher. Values are used literally (no `$VAR` expansion). `CODEX_HOME` and the proxy variables are reserved: use `multi-codex proxy` for proxies. A launcher with environment variables is readable only by you (mode 0700), and `list --json` shows only the variable names; still, the values are stored in plain text, so do not put secrets there that need stronger protection. Older versions of multi-codex ignore the `env` field and drop it on their next write; run `multi-codex env NAME --clear` before downgrading.
+
+### Default account
+
+After `migrate-default`, `~/.codex` is a link to one account, and plain `codex`, the Codex desktop app and IDE extensions use that account. `multi-codex use` shows which one; `multi-codex use NAME` points the link at another account atomically.
+
+A Codex process started without `CODEX_HOME` re-opens files under `~/.codex` while it runs, so switching underneath it would mix the files of two accounts. `use` therefore refuses (exit code 4) while any process has the current default account open — including sessions started with `codex-<name>`, which cannot be told apart. Close Codex (the CLI, the desktop app, IDE extensions and the app-server daemon), switch, then restart them. The check sees only files that are open at that moment, so treat it as a safety net, not a guarantee.
+
+If you `remove` the account that `~/.codex` points to, the link is left pointing at an unregistered directory; `doctor` reports it.
 
 ### Default locations
 
@@ -160,7 +200,13 @@ Sockets and FIFOs (runtime files such as `ipc.sock`) are not copied in copy mode
 
 If `CODEX_HOME`, `CODEX_SQLITE_HOME`, `CODEX_API_KEY` or `CODEX_ACCESS_TOKEN` is set in your environment, multi-codex warns you: these variables override or bypass per-account isolation.
 
-### Undoing a migration by hand
+### Undoing a migration
+
+```sh
+multi-codex restore main
+```
+
+`restore` removes the `~/.codex` link, moves `~/.cx/main` back to `~/.codex` and unregisters the account (its launcher is deleted; shared links inside the directory stay and keep working). It checks the same things as `migrate-default`: whether the directory is in use, and whether credentials are in the system keyring (moving the directory back logs you out in that case; `--accept-relogin` proceeds anyway). If it is interrupted, run the same command again. While a restore is unfinished, other write commands refuse to run. If `~/.codex` currently points to another account, run `multi-codex use main` first. The account directory and `~/.codex` must be on the same file system; otherwise restore by hand:
 
 ```sh
 rm ~/.codex                     # remove the link (only the link)
@@ -183,15 +229,36 @@ multi-codex creates the missing links and remembers which links it created. Turn
 
 If you already linked an account to the shared directory by hand, `multi-codex add NAME --shared --adopt` takes those links over without recreating them: from then on, turning sharing off removes them as well. Only links that already point to the matching shared item are adopted.
 
+### What can be shared
+
+Based on the Codex source code (openai/codex at `6b4daafd`):
+
+| Item | What it is | Share? | Why |
+| ---- | ---- | ---- | ---- |
+| `AGENTS.md` | Global instructions | Yes (default) | Read fresh on every load; Codex does not write it. |
+| `agents/` | Custom agent roles | Yes (default) | Read-only. |
+| `rules/` | Exec policy ("always allow" commands) | Yes (default) | Appends are file-locked. An approval given in one account then applies to all sharing accounts. |
+| `skills/` | Skills | Yes (default) | On start-up Codex rewrites `skills/.system` when its built-in skills differ; harmless as long as all accounts use the same Codex version. |
+| `config.toml` | Settings | With care | Codex writes through the link and replaces the target atomically, so the link survives; but there is no cross-process lock, so two accounts changing settings at the same time can lose one change. |
+| `history.jsonl` | Prompt history | Yes | Reads and writes are file-locked; the histories of the accounts are merged. |
+| `auth.json`, `secrets/`, `.credentials.json`, `.env` | Credentials | **No** | They are the account. |
+| `installation_id` | Installation identifier | No | Sent with requests; sharing makes several accounts look like one installation. |
+| `*.sqlite` (`state_5.sqlite`, …) | Threads, logs, memories | **No** | `state_5.sqlite` records account IDs. |
+| `sessions/`, `archived_sessions/`, `session_index.jsonl` | Session logs | No | The index has only an in-process lock; sessions record the account that created them. |
+| `models_cache.json`, `cache/` | Caches | Not needed | Keyed by the account; a mismatch is a cache miss. |
+| `app-server-control/`, `app-server-daemon/`, `packages/`, `tmp/`, `.tmp/`, `log/`, `shell_snapshots/` | Runtime state | No | Per process or per session. |
+
+Separate directories keep the local state of the accounts apart. They are **not** a security boundary: any program running as your user can read every account directory.
+
 ## Exit codes
 
 | Code | Meaning |
 | ---- | ---- |
 | 0 | Success, or already in the desired state |
-| 1 | Runtime error (I/O, invalid configuration file, failed verification, lock held by another command); `usage`: at least one account failed; `doctor`: at least one check failed |
+| 1 | Runtime error (I/O, invalid configuration file, failed verification, lock held by another command, an unfinished migration or restore blocks the command); `usage`: at least one account failed; `doctor`: at least one check failed |
 | 2 | Invalid command-line arguments |
-| 3 | Conflict with files multi-codex does not own, or `migrate-default` refused because credentials are in the system keyring; nothing was changed |
-| 4 | The migration source is in use |
+| 3 | Conflict with files multi-codex does not own; `migrate-default` or `restore` refused because credentials are in the system keyring; `use` / `restore` found `~/.codex` in an unexpected state or on another file system. Nothing was changed |
+| 4 | The directory to migrate, switch away from or restore is in use |
 
 ## Uninstalling
 

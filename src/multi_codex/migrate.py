@@ -233,9 +233,13 @@ def _precheck_without_journal(config: Config, config_exists: bool, name: str, so
     return None
 
 
-def _check_credentials_store(source: str, name: str, accept_relogin: bool) -> Tuple[Optional[int], bool]:
-    """凭据存在系统钥匙串时，迁移后会丢登录：钥匙串条目的键由 CODEX_HOME 的真实路径算出
-    （上游 login/src/auth/storage.rs:243-257），迁移改变了真实路径，Codex 再也找不到旧条目。
+def _check_credentials_store(source: str, name: str, accept_relogin: bool,
+                             relogin_command: Optional[str] = None) -> Tuple[Optional[int], bool]:
+    """凭据存在系统钥匙串时，移动目录后会丢登录：钥匙串条目的键由 CODEX_HOME 的真实路径算出
+    （上游 login/src/auth/storage.rs:243-257），迁移或 restore 改变了真实路径，Codex 再也找不到旧条目。
+
+    relogin_command：提示用户重新登录的命令。默认是迁移后的 `codex-<名> login`；
+    restore 之后启动命令已被删除，调用方传 `codex login`。
 
     返回 (退出码或 None, relogin_needed)。退出码为 None 表示继续迁移；
     relogin_needed 表示“本来会被拒绝、因为带了 --accept-relogin 才放行”，迁移完成时要提示重新登录。
@@ -245,11 +249,12 @@ def _check_credentials_store(source: str, name: str, accept_relogin: bool) -> Tu
     has_auth_file = os.path.lexists(os.path.join(source, "auth.json"))
     if store == identity.STORE_KEYRING or (store == identity.STORE_AUTO and not has_auth_file):
         detail = ("credentials are stored in the system keyring (cli_auth_credentials_store = {!r}, from {}); "
-                  "the keyring entry is tied to the directory path, so after migration Codex will be "
+                  "the keyring entry is tied to the directory path, so after the move Codex will be "
                   "logged out".format(store, origin))
         if not accept_relogin:
-            error("{}. Rerun with --accept-relogin and log in again with `codex-{} login`, "
-                  "or switch to file storage first".format(detail, name), phase="precheck", path=source)
+            error("{}. Rerun with --accept-relogin and log in again with `{}`, "
+                  "or switch to file storage first".format(detail, relogin_command or "codex-{} login".format(name)),
+                  phase="precheck", path=source)
             return accounts.EXIT_CONFLICT, False
         warn("{}; continuing because of --accept-relogin, you will need to log in again".format(detail))
         return None, True

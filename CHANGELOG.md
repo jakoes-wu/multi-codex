@@ -6,6 +6,29 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- `completion bash|zsh|fish`: shell completion for subcommands, options and
+  account names (e-mail addresses included).
+- `run NAME [-- COMMAND ...]`: run any command (default `codex`) with exactly
+  the environment of the account's launcher; `path NAME` prints the account
+  directory.
+- Per-account environment variables: `env NAME KEY=VALUE`, `--unset`,
+  `--clear` (`accounts.<name>.env` in the configuration). Launchers with
+  variables are written with mode 0700; `list --json` shows only the names.
+- `use [NAME]`: show or atomically change the default account (`~/.codex`),
+  refusing while the current default account is in use.
+- `restore NAME`: undo `migrate-default`, resumable after an interruption;
+  other write commands are blocked until it finishes.
+- `list` shows the default account (`default:` line, `default_account` in
+  `--json`).
+- README: which items of an account directory can be shared, and why.
+
+### Fixed
+
+- `doctor` did not expand `~` when checking `~/.codex`, so the `default-dir`
+  check always reported that it did not exist.
+
 ## [0.3.0] - 2026-10-01
 
 ### Added

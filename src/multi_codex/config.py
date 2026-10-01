@@ -23,6 +23,14 @@ PROXY_INHERIT = "inherit"
 PROXY_OFF = "off"
 PROXY_SCHEMES = ("http", "https", "socks5", "socks5h")
 
+# 启动命令的代理逻辑管理的 8 个变量（launcher.py 也用这份列表）。账号环境变量不得设置它们：
+# 代理一律由 `multi-codex proxy` 管理，两处都能设置时，谁覆盖谁取决于行的顺序，用户很难看懂。
+PROXY_ENV_VARS = ("HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY", "NO_PROXY",
+                  "https_proxy", "http_proxy", "all_proxy", "no_proxy")
+# CODEX_HOME 由启动命令设为账号目录，被覆盖就失去了按账号隔离的意义。
+RESERVED_ENV_KEYS = ("CODEX_HOME",) + PROXY_ENV_VARS
+ENV_KEY_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
 
 class ConfigError(Exception):
     """配置文件内容不合法，对应退出码 1。"""
@@ -33,20 +41,29 @@ class Account(object):
 
     managed_links 是工具内部状态：记录本工具在该账号目录里建立过的共享链接，
     关闭共享时只删除这些链接，用户自己建的同名链接不受影响。
+
+    env 是写进启动命令的额外环境变量，值按字面写入、不经 shell 求值。
     """
 
     def __init__(self, name: str, proxy: str = PROXY_INHERIT, shared: bool = False,
-                 managed_links: Optional[List[str]] = None) -> None:
+                 managed_links: Optional[List[str]] = None, env: Optional[Dict[str, str]] = None) -> None:
         self.name = name
         self.proxy = proxy
         self.shared = shared
         self.managed_links = list(managed_links or [])
+        self.env = dict(env or {})
 
     def copy(self) -> "Account":
-        return Account(self.name, self.proxy, self.shared, list(self.managed_links))
+        return Account(self.name, self.proxy, self.shared, list(self.managed_links), dict(self.env))
 
     def to_dict(self) -> dict:
-        return {"proxy": self.proxy, "shared": self.shared, "managed_links": list(self.managed_links)}
+        data = {"proxy": self.proxy, "shared": self.shared, "managed_links": list(self.managed_links)}
+        # 没有环境变量时不写这个字段：0.3.0 的配置序列化结果保持不变，升级后的第一条写命令
+        # 才不会因为“配置文本变了”而把每个账号都判为 update（accounts.plan 按序列化文本比较）。
+        # 按键名排序：apply -f 文件里键的顺序不同，不应被当成改动。
+        if self.env:
+            data["env"] = {key: self.env[key] for key in sorted(self.env)}
+        return data
 
 
 class Config(object):
@@ -186,7 +203,16 @@ def _parse_account(name: str, value: object, source: str) -> Account:
     links = value.get("managed_links", [])
     if not isinstance(links, list) or not all(_valid_item(item) for item in links):
         raise ConfigError("{}: account {!r}: 'managed_links' must be a list of names".format(source, name))
-    return Account(name, proxy, shared, links)
+    env = value.get("env", {})
+    if not isinstance(env, dict):
+        raise ConfigError("{}: account {!r}: 'env' must be an object".format(source, name))
+    for key, item in env.items():
+        try:
+            validate_env_key(key)
+            validate_env_value(item)
+        except ValueError as exc:
+            raise ConfigError("{}: account {!r}: {}".format(source, name, exc))
+    return Account(name, proxy, shared, links, env)
 
 
 def validate_name(name: str) -> None:
@@ -194,6 +220,24 @@ def validate_name(name: str) -> None:
         raise ValueError(
             "invalid account name {!r}: use 1-64 characters from [A-Za-z0-9._@+-], "
             "starting with a letter or digit".format(name))
+
+
+def validate_env_key(key: object) -> None:
+    if not isinstance(key, str) or not ENV_KEY_PATTERN.match(key):
+        raise ValueError("invalid environment variable name {!r}: use letters, digits and '_', "
+                         "not starting with a digit".format(key))
+    if key == "CODEX_HOME":
+        raise ValueError("CODEX_HOME is managed by multi-codex and cannot be set per account")
+    if key in PROXY_ENV_VARS:
+        raise ValueError("{} is a proxy variable; use `multi-codex proxy` for proxy settings".format(key))
+
+
+def validate_env_value(value: object) -> None:
+    if not isinstance(value, str):
+        raise ValueError("environment variable values must be strings")
+    if "\0" in value:
+        # exec 用 C 字符串传递环境变量，NUL 之后的部分会被截掉。
+        raise ValueError("environment variable values must not contain NUL characters")
 
 
 def normalize_proxy(value: object) -> str:
