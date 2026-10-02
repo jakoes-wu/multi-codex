@@ -10,7 +10,7 @@ All notable changes to this project are documented here. The format follows
 
 - Homebrew formula: `brew install jakoes-wu/tap/multi-codex`.
 - Releases are also published to PyPI by a GitHub Actions workflow
-  (Trusted Publishing).
+  (Trusted Publishing): `pipx install multi-codex`.
 - README: badges and a demo animation.
 
 ## [0.7.0] - 2026-10-01

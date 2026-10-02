@@ -1,6 +1,8 @@
 # 分发与展示：PyPI 发布、Homebrew 配方、README 演示图与徽章
 
-> 2026-10-02 注记：方案已定，代码待落地。
+> 2026-10-02 注记：已落地。
+> - PR #20（main `cf61548`）：`pypi.yml`、README 徽章与演示图、`scripts/make-assets.py`、`.gitattributes`、pyproject 元数据；Homebrew 配方在 https://github.com/jakoes-wu/homebrew-tap （本机 install / test / audit 通过）。
+> - 用户登记 Trusted Publisher 后，手动触发 `pypi.yml` 补传 v0.7.0 成功（run 37008405060），从 PyPI 官方源安装后 `multi-codex --version` 为 0.7.0；随后另起 PR 给 README 加 PyPI 徽章与 `pipx install multi-codex`。
 
 ## 1. 背景
 

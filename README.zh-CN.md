@@ -4,6 +4,7 @@
 
 [![Release](https://img.shields.io/github/v/release/jakoes-wu/multi-codex)](https://github.com/jakoes-wu/multi-codex/releases)
 [![CI](https://github.com/jakoes-wu/multi-codex/actions/workflows/ci.yml/badge.svg)](https://github.com/jakoes-wu/multi-codex/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/multi-codex)](https://pypi.org/project/multi-codex/)
 ![Python](https://img.shields.io/badge/python-3.8%2B-blue)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
@@ -40,7 +41,7 @@ curl -fsSL https://raw.githubusercontent.com/jakoes-wu/multi-codex/main/install.
 multi-codex --version
 ```
 
-macOS 上也可以用 Homebrew 安装：`brew install jakoes-wu/tap/multi-codex`。各账号的 `codex-<名称>` 启动命令仍然放在 `~/.local/bin`。
+其它安装方式：`pipx install multi-codex`（从 PyPI 安装），或者在 macOS 上用 `brew install jakoes-wu/tap/multi-codex`。无论哪种方式，各账号的 `codex-<名称>` 启动命令都放在 `~/.local/bin`。
 
 `multi-codex` 命令和各账号的 `codex-<名称>` 启动命令都在 `~/.local/bin`。如果 shell 提示 `command not found`，说明这个目录还不在 `PATH` 中；安装脚本只给出提示，不会修改你的 shell 配置文件。把下面这行加到 `~/.zshrc` 或 `~/.bashrc`，再打开一个新终端：
 
@@ -524,7 +525,7 @@ cd multi-codex
 ./install.sh
 ```
 
-用 pipx 安装：`pipx install git+https://github.com/jakoes-wu/multi-codex`。
+用 pipx 安装：`pipx install multi-codex`（PyPI 上的最新发布版），或者 `pipx install git+https://github.com/jakoes-wu/multi-codex`（当前 `main` 分支）。
 
 工具本身装到 `~/.local/share/multi-codex`，`multi-codex` 命令装到 `~/.local/bin`；要换位置，用 `--prefix DIR` 指定。全部安装选项见 `./install.sh --help`。
 
