@@ -14,7 +14,7 @@
 import os
 from typing import Dict, FrozenSet, Iterable, List, Optional, Sequence, Set, Union
 
-from . import launcher, shared
+from . import launcher, router, shared
 from .actions import (CONFLICT, CREATE, DELETE, SKIP, UNCHANGED, UPDATE, Action, error,
                       has_conflict, info, print_action)
 from .config import Account, Config, config_path, dump_config, save_config
@@ -121,6 +121,8 @@ def plan(old: Config, new: Config, *, config_exists: bool = True,
                 actions.extend(_plan_launcher_delete(new_bin, name, planned_deletes,
                                                      "orphan launcher", path=path))
 
+    actions.extend(_plan_router(old_bin, new_bin, new, planned_deletes))
+
     config_changed = not config_exists or dump_config(old) != dump_config(new)
     config_action = Action(CREATE if not config_exists else (UPDATE if config_changed else UNCHANGED),
                            "config", config_path())
@@ -189,6 +191,44 @@ def _plan_launcher(bin_dir: str, name: str, directory: str, proxy: str,
     if launcher.launcher_file_ok(path, content, env):
         return [Action(UNCHANGED, "launcher", path)]
     return [Action(UPDATE, "launcher", path, run=_write_launcher(path, content, mode))]
+
+
+def _plan_router(old_bin: str, new_bin: str, new: Config, planned_deletes: Set[str]) -> List[Action]:
+    """codex-auto 入口（feature-auto-launcher §5.1.2）：有目录绑定时生成或更新，没有时删除。
+
+    必须放在账号启动命令的删除（含孤儿清理）之后计算：rename / remove / restore 名为 auto 的账号时，
+    codex-auto 原本是它的启动命令，正被删除，这里要把它当作不存在、重建成入口。
+    """
+    actions: List[Action] = []
+    path = router.router_path(new_bin)
+    if old_bin != new_bin:
+        old_path = router.router_path(old_bin)
+        if router.is_router(old_path):
+            actions.append(Action(DELETE, "launcher", old_path, "bin_dir changed", _unlink_file(old_path)))
+    if not new.bindings:
+        if router.is_router(path):
+            actions.append(Action(DELETE, "launcher", path, "no directory bindings", _unlink_file(path)))
+        return actions
+    owner = new.find(router.ROUTER_NAME)
+    if owner is not None:
+        return actions + [Action(CONFLICT, "launcher", path,
+                                 "codex-auto is generated from directory bindings; rename the account named {!r} "
+                                 "(multi-codex rename {} NEW) or remove the bindings".format(owner.name, owner.name))]
+    content = router.render(new)
+    write = _write_launcher(path, content, router.ROUTER_MODE)
+    if entry_kind(path) == KIND_MISSING or router.same_file(path, planned_deletes):
+        return actions + [Action(CREATE, "launcher", path, run=write)]
+    if not router.is_router(path):
+        return actions + [Action(CONFLICT, "launcher", path, "already exists and is not the multi-codex router")]
+    if launcher.launcher_file_ok(path, content, None):
+        return actions + [Action(UNCHANGED, "launcher", path)]
+    return actions + [Action(UPDATE, "launcher", path, run=write)]
+
+
+def _unlink_file(path: str):
+    def run() -> None:
+        os.unlink(path)
+    return run
 
 
 def _write_launcher(path: str, content: str, mode: int):

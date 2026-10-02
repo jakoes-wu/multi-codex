@@ -110,7 +110,7 @@ Without a name, the account is named after the e-mail address in `~/.codex/auth.
 | Open VS Code with an account | `multi-codex code work ~/src/project` | [VS Code and the desktop app](#vs-code-and-the-desktop-app-experimental) |
 | Open the desktop app with an account (macOS) | `multi-codex app work` | [VS Code and the desktop app](#vs-code-and-the-desktop-app-experimental) |
 | Change the account that plain `codex` and the Dock apps use | `multi-codex use work` (after `migrate-default`) | [Default account](#default-account) |
-| Always use one account inside a project | In the project directory: `multi-codex bind work`, then `multi-codex run` | [Directory bindings](#directory-bindings) |
+| Always use one account inside a project | In the project directory: `multi-codex bind work`, then `codex-auto` | [Directory bindings](#directory-bindings) |
 | Set or change an account's proxy | `multi-codex set work --proxy 7901` | [Proxy values](#proxy-values) |
 | Share `AGENTS.md`, skills and rules between accounts | Put them in `~/.codex-shared`, then run `multi-codex set work --shared` | [Shared resources](#shared-resources) |
 | Start a new account with another account's settings | `multi-codex add new --config-from work` | [Copying settings](#copying-settings-from-another-account) |
@@ -148,6 +148,7 @@ More questions are answered in the [FAQ](#faq).
 | `multi-codex doctor [--json]` | Check the installation, configuration and accounts. Read-only. |
 | `multi-codex run [NAME] [-- COMMAND ...]` | Run a command (default: `codex`) with an account's environment. Without NAME, the account bound to the current directory is used. |
 | `multi-codex bind [NAME [DIR]]` / `unbind [DIR]` | Bind a directory to an account, list bindings, or remove one. |
+| `multi-codex which [DIR]` | Show which account a directory uses (the same one `codex-auto` and `run` pick). |
 | `multi-codex code NAME [PATH] [-- ARGS]` | Open VS Code for an account (experimental). |
 | `multi-codex app NAME` | Open the Codex desktop app for an account (macOS, experimental). |
 | `multi-codex path NAME` | Print an account's directory. |
@@ -194,7 +195,7 @@ Subcommands, options and registered account names (including e-mail addresses) a
 
 ### Running other commands
 
-`multi-codex run NAME -- COMMAND ...` runs any command with exactly the environment of `codex-NAME` (`CODEX_HOME`, proxy, extra variables). Without a command it runs `codex`. Everything after the first `--` is passed through unchanged; the exit code is the command's. `multi-codex path NAME` prints the account directory.
+`multi-codex run NAME -- COMMAND ...` runs any command with exactly the environment of `codex-NAME` (`CODEX_HOME`, proxy, extra variables). Without a command it runs `codex`. Everything after the first `--` is passed through unchanged; the exit code is the command's. `multi-codex path NAME` prints the account directory. For example, to manage an account's MCP servers: `multi-codex run work -- codex mcp list`.
 
 ### Directory bindings
 
@@ -203,7 +204,11 @@ cd ~/work/project && multi-codex bind work     # this directory and everything b
 multi-codex run -- codex resume                # no account name needed here
 multi-codex bind                               # list bindings; * marks the one in effect here
 multi-codex unbind                             # remove the binding of the current directory
+codex-auto                                     # runs codex with the bound account
+multi-codex which                              # prints the account this directory uses
 ```
+
+While at least one binding exists, multi-codex generates `codex-auto` next to the other launchers. It looks up the nearest bound directory exactly like `run` and starts that account's launcher; outside any bound directory it runs plain `codex` (the default account, see [Default account](#default-account)) and says so on stderr. It is updated whenever bindings or accounts change and removed with the last binding. An account named `auto` cannot coexist with bindings: rename it first (`multi-codex rename auto NEW`).
 
 `run` without an account name walks up from the current directory and uses the nearest bound directory. Bindings are stored in `config.json` (not in your project), keyed by the real path of the directory (links resolved, the on-disk letter case used on case-insensitive file systems). `apply -f` keeps the current bindings; removing an account (`remove`, `restore`, `apply -f`) also removes its bindings. Older versions of multi-codex drop the `bindings` field on their next write.
 
@@ -217,7 +222,7 @@ multi-codex unbind                             # remove the binding of the curre
 multi-codex rename work client-a
 ```
 
-The account and its launcher get the new name (`codex-client-a`; `codex-work` is deleted), and directory bindings and the default account follow. The directory stays where it is, so the login, sessions and shared links are kept; `config.json` records it as `"dir": "work"` (in `list --json`, `dir` is the full path instead). A name that is still used as another account's directory, such as `work` after this rename, cannot be given to a new account. Renaming only the letter case is not supported. Before downgrading to a version older than 0.9, rename the account back: older versions ignore `dir` and would use `<root>/client-a`.
+The account and its launcher get the new name (`codex-client-a`; `codex-work` is deleted), and directory bindings, `codex-auto` and the default account follow. The directory stays where it is, so the login, sessions and shared links are kept; `config.json` records it as `"dir": "work"` (in `list --json`, `dir` is the full path instead). A name that is still used as another account's directory, such as `work` after this rename, cannot be given to a new account. Renaming only the letter case is not supported. Before downgrading to a version older than 0.9, rename the account back: older versions ignore `dir` and would use `<root>/client-a`.
 
 ### Per-account environment variables
 
@@ -468,7 +473,7 @@ The tool goes to `~/.local/share/multi-codex` and the `multi-codex` command to `
 curl -fsSL https://raw.githubusercontent.com/jakoes-wu/multi-codex/main/install.sh | sh -s -- --uninstall    # without a clone
 ```
 
-This removes the tool only. Your configuration, account directories and `codex-<name>` launchers stay; the launchers keep working because they do not depend on multi-codex.
+This removes the tool only. Your configuration, account directories, `codex-<name>` launchers and `codex-auto` stay; they keep working because they do not depend on multi-codex.
 
 ## Contributing
 

@@ -110,7 +110,7 @@ multi-codex migrate-default
 | 用某个账号打开 VS Code | `multi-codex code work ~/src/project` | 按账号打开 VS Code 与桌面端 |
 | 用某个账号打开桌面端（macOS） | `multi-codex app work` | 按账号打开 VS Code 与桌面端 |
 | 换掉直接运行 `codex` 和从 Dock 启动时用的账号 | `multi-codex use work`（需先 `migrate-default`） | 默认账号 |
-| 在某个项目里固定使用一个账号 | 在项目目录执行 `multi-codex bind work`，之后用 `multi-codex run` | 目录绑定账号 |
+| 在某个项目里固定使用一个账号 | 在项目目录执行 `multi-codex bind work`，之后用 `codex-auto` | 目录绑定账号 |
 | 设置或修改账号的代理 | `multi-codex set work --proxy 7901` | 代理取值 |
 | 在账号之间共享 `AGENTS.md`、skills、rules | 把要共享的内容放进 `~/.codex-shared`，再执行 `multi-codex set work --shared` | 共享资源 |
 | 新账号沿用另一个账号的配置 | `multi-codex add new --config-from work` | 从另一个账号复制配置 |
@@ -148,6 +148,7 @@ multi-codex migrate-default
 | `multi-codex doctor [--json]` | 检查安装、配置和各账号，只读 |
 | `multi-codex run [名称] [-- 命令 ...]` | 在账号的环境下运行命令（默认运行 `codex`）；省略名称时，使用当前目录绑定的账号 |
 | `multi-codex bind [名称 [目录]]` / `unbind [目录]` | 把目录绑定到账号、列出绑定，或解除绑定 |
+| `multi-codex which [目录]` | 显示某个目录会用哪个账号（与 `codex-auto`、`run` 的选择相同） |
 | `multi-codex code 名称 [路径] [-- 参数]` | 按账号打开 VS Code（实验功能） |
 | `multi-codex app 名称` | 按账号打开 Codex 桌面端（仅 macOS，实验功能） |
 | `multi-codex path 名称` | 输出账号目录 |
@@ -214,7 +215,7 @@ multi-codex completion fish | source      # 写进 ~/.config/fish/config.fish
 
 `multi-codex run 名称 -- 命令 ...` 以与 `codex-名称` 完全相同的环境运行任意命令：`CODEX_HOME`、代理、额外的环境变量都一样。不带命令时运行 `codex`。第一个 `--` 之后的内容原样传给命令，退出码就是该命令的退出码。
 
-`multi-codex path 名称` 输出账号目录。
+`multi-codex path 名称` 输出账号目录。例如管理某个账号的 MCP 服务器：`multi-codex run work -- codex mcp list`。
 
 ### 目录绑定账号
 
@@ -223,6 +224,8 @@ cd ~/work/project && multi-codex bind work     # 这个目录及其所有子目�
 multi-codex run -- codex resume                # 在这里不用写账号名
 multi-codex bind                               # 列出绑定，* 标出对当前目录生效的那一条
 multi-codex unbind                             # 解除当前目录的绑定
+codex-auto                                     # 用绑定的账号运行 codex
+multi-codex which                              # 输出当前目录会用哪个账号
 ```
 
 - **查找规则**：`run` 不带账号名时，从当前目录开始逐级向上，使用最近一个已绑定的目录。
@@ -230,6 +233,7 @@ multi-codex unbind                             # 解除当前目录的绑定
 - **路径匹配**：以目录的真实路径为准，即解析软链后的路径；在不区分大小写的文件系统上，使用磁盘上的真实大小写。
 - **与其它命令的关系**：`apply -f` 保留现有的绑定；注销账号时（`remove`、`restore`、`apply -f`），它的绑定会一并删除。
 - **降级**：旧版本的 multi-codex 会在下一次写配置时丢掉 `bindings` 字段。
+- **`codex-auto`**：只要有一条绑定，multi-codex 就在启动命令目录里生成 `codex-auto`。它按与 `run` 完全相同的规则找最近的绑定，再启动该账号的启动命令；不在任何绑定目录下时运行普通 `codex`（默认账号，见“默认账号”一节），并在 stderr 说明。绑定或账号变化时它会自动更新，最后一条绑定删除时它也被删除。名为 `auto` 的账号不能与绑定同时存在，请先改名（`multi-codex rename auto 新名`）。
 
 ### 从另一个账号复制配置
 
@@ -247,7 +251,7 @@ multi-codex unbind                             # 解除当前目录的绑定
 multi-codex rename work client-a
 ```
 
-- 账号和启动命令换成新名字（生成 `codex-client-a`，删除 `codex-work`），目录绑定和默认账号跟着改。
+- 账号和启动命令换成新名字（生成 `codex-client-a`，删除 `codex-work`），目录绑定、`codex-auto` 和默认账号跟着改。
 - 目录原地不动，登录、会话和共享链接都保留；`config.json` 里记为 `"dir": "work"`（`list --json` 里的 `dir` 则是完整路径）。
 - 仍被别的账号用作目录名的名字（例如改名后的 `work`）不能再给新账号使用。只改大小写的改名不支持。
 - 降级到 0.9 以前的版本之前，先把账号改回原名：旧版本不认识 `dir`，会改用 `<根目录>/client-a`。
@@ -571,7 +575,7 @@ cd multi-codex
 curl -fsSL https://raw.githubusercontent.com/jakoes-wu/multi-codex/main/install.sh | sh -s -- --uninstall    # 没有克隆仓库时
 ```
 
-卸载只删除工具本身，配置、账号目录和 `codex-<名称>` 启动命令都会保留。启动命令不依赖 multi-codex，卸载后仍能继续使用。
+卸载只删除工具本身，配置、账号目录、`codex-<名称>` 启动命令和 `codex-auto` 都会保留。它们不依赖 multi-codex，卸载后仍能继续使用。
 
 ## 参与贡献
 

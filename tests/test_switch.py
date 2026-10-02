@@ -228,15 +228,32 @@ class RestoreTest(SwitchBase):
         self.write(self.marker(), json.dumps(data))
         self.assertEqual(self.run_cli("restore", "a").code, 3)
 
-    def test_unregister_failure_keeps_marker(self):
-        # b 的启动命令被换成不受管的文件：converge 判冲突，第 3 步失败。
+    def test_conflict_is_found_before_moving(self):
+        # b 的启动命令被换成不受管的文件：注销时的收敛会冲突。v0.10 起在动数据之前预检（feature-auto-launcher
+        # §5.1.4），所以什么都不动、不留标记。
         launcher_b = os.path.join(self.bin, "codex-b")
         os.unlink(launcher_b)
         self.write(launcher_b, "#!/bin/sh\n", 0o755)
+        before = self.tree(self.dir_of("a"))
         result = self.run_cli("restore", "a")
         self.assertEqual(result.code, 3, result)
-        self.assertTrue(os.path.exists(self.marker()))
+        self.assertIn("nothing was moved", result.err)
+        self.assertFalse(os.path.exists(self.marker()))
+        self.assertTrue(os.path.islink(self.link))
+        self.assertEqual(self.tree(self.dir_of("a")), before)
         os.unlink(launcher_b)
+        self.ok("restore", "a")
+        self.assert_restored()
+
+    @unittest.skipIf(os.geteuid() == 0, "root ignores directory permissions")
+    def test_unregister_failure_keeps_marker(self):
+        # 预检查不出的失败：启动命令目录不可写，删除 codex-a 时 OSError，第 3 步失败，保留标记。
+        os.chmod(self.bin, 0o555)
+        self.addCleanup(os.chmod, self.bin, 0o755)
+        result = self.run_cli("restore", "a")
+        self.assertEqual(result.code, 1, result)
+        self.assertTrue(os.path.exists(self.marker()))
+        os.chmod(self.bin, 0o755)
         self.assertIn("from state C", self.ok("restore", "a").out)
         self.assertFalse(os.path.exists(self.marker()))
 

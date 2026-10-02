@@ -241,6 +241,20 @@ def restore_account(config: Config, config_exists: bool, name: str, skip_process
             if code:
                 return code
 
+    if state == STATE_A:
+        # 先移动数据、最后才收敛注销：收敛若冲突（例如 codex-auto 与名为 auto 的账号），会停在“数据已回到
+        # ~/.codex、注销失败”的半完成状态。所以在写标记、动数据之前，用同样的参数先预检一次
+        # （feature-auto-launcher §5.1.4）。A2/B/C 已写标记，配置被锁住，进入前已在状态 A 通过预检。
+        new = _unregistered(config, canonical)
+        conflicts = [action for action in accounts.plan(config, new, config_exists=config_exists,
+                                                        orphan_scope=frozenset([canonical.casefold()]))
+                     if action.status == accounts.CONFLICT]
+        if conflicts:
+            for action in conflicts:
+                error(action.reason, phase="precheck", path=action.path)
+            error("unregistering {} would conflict; nothing was moved".format(canonical), phase="precheck")
+            return accounts.EXIT_CONFLICT
+
     if dry_run:
         if state in (STATE_A, STATE_A2):
             info("(dry-run) would unlink ~/.codex")
@@ -270,11 +284,7 @@ def restore_account(config: Config, config_exists: bool, name: str, skip_process
         migrate._test_hook("restore-renamed")
 
     info("step=unregister {}".format(canonical))
-    new = config.copy()
-    current = new.find(canonical)
-    if current is not None:
-        del new.accounts[current.name]
-    binding.drop_account(new, canonical)
+    new = _unregistered(config, canonical)
     code = accounts.converge(config, new, config_exists=config_exists, dry_run=False,
                              orphan_scope=frozenset([canonical.casefold()]))
     if code != accounts.EXIT_OK:
@@ -288,3 +298,13 @@ def restore_account(config: Config, config_exists: bool, name: str, skip_process
     if relogin_needed:
         info("log in again: codex login")
     return accounts.EXIT_OK
+
+
+def _unregistered(config: Config, canonical: str) -> Config:
+    """注销 canonical 之后的配置：删账号与指向它的绑定。预检与真正注销必须用同一份。"""
+    new = config.copy()
+    current = new.find(canonical)
+    if current is not None:
+        del new.accounts[current.name]
+    binding.drop_account(new, canonical)
+    return new
