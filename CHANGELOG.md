@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-10-01
+
 ### Added
 
 - Running `multi-codex` without arguments prints a short getting-started guide
@@ -122,7 +124,8 @@ First release (macOS and Linux).
 - Optional shared resources linked from one directory into selected accounts.
 - `install.sh` with `--config`, `--prefix` and `--uninstall`.
 
-[Unreleased]: https://github.com/jakoes-wu/multi-codex/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/jakoes-wu/multi-codex/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/jakoes-wu/multi-codex/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/jakoes-wu/multi-codex/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/jakoes-wu/multi-codex/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/jakoes-wu/multi-codex/compare/v0.2.0...v0.3.0
