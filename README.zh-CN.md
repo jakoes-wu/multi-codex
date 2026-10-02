@@ -52,6 +52,8 @@ multi-codex add personal
 
 每条命令会创建一个目录（`~/.cx/work`）和一个启动命令（`codex-work`）。名称以字母或数字开头，可以包含字母、数字和 `._@+-`，也可以直接用邮箱。
 
+`add` 之后，multi-codex 会提示下一步：登录要执行的命令；`~/.local/bin` 还不在 `PATH` 中时，也会给出警告。不带参数运行 `multi-codex` 可以再次看到这些步骤。
+
 某个账号需要走代理时，给它一个本地端口或代理 URL，例如 `multi-codex add work --proxy 7901`（等同于 `http://127.0.0.1:7901`），见“代理取值”一节。
 
 ### 2. 每个账号登录一次
