@@ -230,7 +230,7 @@ class EnvTest(ErgonomicsBase):
         self.ok("env", "work", "A=1", "B=2")
         spec = os.path.join(self.tmp, "spec.json")
         self.write(spec, json.dumps({"version": 1, "accounts": {"work": {"env": {"B": "2", "A": "1"}}}}))
-        result = self.ok("apply", "-f", spec)
+        result = self.ok("apply", "-f", spec, "-v")
         self.assertIn("unchanged config", result.out)
 
     def test_dry_run_and_migration_block(self):

@@ -13,8 +13,8 @@ import argparse
 from typing import Dict, List, Tuple
 
 # 第一个位置参数是账号名的子命令；usage 的每个位置参数都是账号名。
-ACCOUNT_COMMANDS = ("add", "proxy", "remove", "migrate-default", "run", "path", "env", "usage", "use", "restore",
-                    "bind", "code", "app")
+ACCOUNT_COMMANDS = ("add", "login", "proxy", "remove", "migrate-default", "run", "path", "env", "usage", "use",
+                    "restore", "bind", "code", "app")
 MULTI_ACCOUNT_COMMANDS = ("usage",)
 SHELLS = ("bash", "zsh", "fish")
 
@@ -79,7 +79,7 @@ def bash_script(spec: Dict[str, Tuple[List[str], List[str]]]) -> str:
         '            [[ "$w" == -* ]] || cmd="$w"',
         "            continue",
         "        fi",
-        '        if [[ "$cmd" == run && "$w" == "--" ]]; then after_dd=1; break; fi',
+        '        if [[ ( "$cmd" == run || "$cmd" == login ) && "$w" == "--" ]]; then after_dd=1; break; fi',
         "        if (( skip )); then skip=0; continue; fi",
         '        if [[ "$w" == -* ]]; then',
         '            case " $(_multi_codex_value_options "$cmd") " in *" $w "*) skip=1 ;; esac',
@@ -141,7 +141,7 @@ def zsh_script(spec: Dict[str, Tuple[List[str], List[str]]]) -> str:
         '            [[ "$w" == -* ]] || cmd="$w"',
         "            continue",
         "        fi",
-        '        if [[ "$cmd" == run && "$w" == "--" ]]; then after_dd=1; break; fi',
+        '        if [[ ( "$cmd" == run || "$cmd" == login ) && "$w" == "--" ]]; then after_dd=1; break; fi',
         "        if (( skip )); then skip=0; continue; fi",
         '        if [[ "$w" == -* ]]; then',
         '            [[ " $(_multi_codex_value_options "$cmd") " == *" $w "* ]] && skip=1',
@@ -203,7 +203,7 @@ def fish_script(spec: Dict[str, Tuple[List[str], List[str]]]) -> str:
         "            string match -q -- '-*' $w; or set cmd $w",
         "            continue",
         "        end",
-        "        if test \"$cmd\" = run; and test \"$w\" = --",
+        "        if contains -- \"$cmd\" run login; and test \"$w\" = --",
         "            return 1",
         "        end",
         "        if test $skip -eq 1",

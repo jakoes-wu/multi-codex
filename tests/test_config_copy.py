@@ -31,7 +31,7 @@ class ConfigCopyTest(CliTestCase):
         with open(self.target) as handle:
             self.assertEqual(handle.read(), CONTENT)
         self.assertEqual(stat.S_IMODE(os.stat(self.target).st_mode), 0o600)
-        self.assertIn("unchanged config-file", self.ok("add", "new", "--config-from", "work").out)
+        self.assertIn("unchanged config-file", self.ok("add", "new", "--config-from", "work", "-v").out)
 
     def test_existing_different_content_is_conflict(self):
         self.ok("add", "new")

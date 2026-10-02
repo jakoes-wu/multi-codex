@@ -175,10 +175,10 @@ def _check_account(config, name: str) -> Tuple[Check, Optional[identity.Identity
     hint = None
     if found.login == identity.LOGIN_LOGGED_OUT:
         problems.append("not logged in")
-        hint = "codex-{} login".format(name)
+        hint = "multi-codex login {}".format(name)
     elif found.login == identity.LOGIN_UNREADABLE:
         problems.append("auth.json cannot be read")
-        hint = "codex-{} login".format(name)
+        hint = "multi-codex login {}".format(name)
     elif found.login == identity.LOGIN_KEYRING:
         problems.append("credentials are in the system keyring (cli_auth_credentials_store = {!r}); "
                         "the login cannot be read from files".format(found.store))

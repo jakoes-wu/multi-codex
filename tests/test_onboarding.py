@@ -31,13 +31,13 @@ class AddHintTest(OnboardingBase):
 
     def test_bin_dir_not_on_path(self):
         result = self.ok("add", "work")
-        self.assertIn("multi-codex run work -- codex login", result.err)
+        # v0.7 起登录提示统一为 multi-codex login（feature-onboarding-commands B1），不再依赖 PATH。
+        self.assertIn("hint: next: log in with `multi-codex login work`", result.err)
         self.assertIn("is not on PATH", result.err)
-        self.assertNotIn("codex-work login", result.err)
 
     def test_bin_dir_on_path(self):
         result = self.ok("add", "work", env=self.with_bin_on_path())
-        self.assertIn("hint: next: log in with `codex-work login`", result.err)
+        self.assertIn("hint: next: log in with `multi-codex login work`", result.err)
         self.assertNotIn("is not on PATH", result.err)
 
     def test_logged_in_account_gets_no_login_hint(self):
@@ -83,7 +83,7 @@ class GettingStartedTest(OnboardingBase):
 
     def test_existing_codex_dir(self):
         os.makedirs(os.path.join(self.home, ".codex"))
-        self.assertIn("multi-codex migrate-default NAME", self.ok().out)
+        self.assertIn("multi-codex migrate-default [NAME]", self.ok().out)
 
     def test_with_accounts(self):
         self.ok("add", "work")

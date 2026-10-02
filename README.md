@@ -59,9 +59,11 @@ If an account should go through a proxy, give it a local port or a URL, for exam
 ### 2. Log in once per account
 
 ```sh
-codex-work login
-codex-personal login
+multi-codex login work
+multi-codex login personal
 ```
+
+`multi-codex login NAME` runs `codex login` with the account's environment and works even before `~/.local/bin` is on your `PATH`; `codex-work login` does the same.
 
 ### 3. Use the launchers instead of `codex`
 
@@ -84,10 +86,10 @@ Your existing `~/.codex` can become an account as well, so you do not have to lo
 
 ```sh
 # Close Codex first: terminals, VS Code, the desktop app
-multi-codex migrate-default main
+multi-codex migrate-default
 ```
 
-This moves `~/.codex` to `~/.cx/main`, leaves a link at `~/.codex` and creates `codex-main`. Plain `codex`, VS Code, the desktop app and old absolute paths under `~/.codex` keep working as before. Later, `multi-codex use work` makes another account the default. If Codex keeps your login in the system keyring, the command stops and explains why. Details and how to undo it: [Migrating `~/.codex`](#migrating-codex).
+Without a name, the account is named after the e-mail address in `~/.codex/auth.json`; if there is none (API key, not logged in, keyring), pass a name, for example `multi-codex migrate-default main`. This moves `~/.codex` to `~/.cx/<name>`, leaves a link at `~/.codex` and creates `codex-<name>`. Plain `codex`, VS Code, the desktop app and old absolute paths under `~/.codex` keep working as before. Later, `multi-codex use work` makes another account the default. If Codex keeps your login in the system keyring, the command stops and explains why. Details and how to undo it: [Migrating `~/.codex`](#migrating-codex).
 
 ## Common tasks
 
@@ -110,7 +112,7 @@ More questions are answered in the [FAQ](#faq).
 
 ## Good to know
 
-- **Safe to re-run.** Every command can be run again; state that is already right is reported as `unchanged`.
+- **Safe to re-run.** Every command can be run again. Write commands print only what they change, or `already up to date`; add `-v` to see every item, including unchanged ones.
 - **Never overwrites your files.** If a file that multi-codex did not create is in the way, it reports a conflict and changes nothing.
 - **Interrupted migrations resume.** Run the same command again and it continues from the actual state on disk.
 - **Not a security boundary.** Separate directories keep the accounts' local state apart, but any program running as your user can read every account directory.
@@ -120,8 +122,9 @@ More questions are answered in the [FAQ](#faq).
 | Command | What it does |
 | ---- | ---- |
 | `multi-codex init [--root DIR] [--bin-dir DIR] [--shared-dir DIR] [--shared-items A,B]` | Create or change global settings. |
-| `multi-codex migrate-default NAME [--source DIR] [--copy] [--keep-backup] [--proxy P] [--skip-process-check] [--accept-relogin]` | Turn the default directory into an account. |
+| `multi-codex migrate-default [NAME] [--source DIR] [--copy] [--keep-backup] [--proxy P] [--skip-process-check] [--accept-relogin]` | Turn the default directory into an account. Without NAME, the e-mail address in its `auth.json` is used. |
 | `multi-codex add NAME [--proxy P] [--shared \| --no-shared] [--adopt] [--config-from OTHER]` | Add an account, adopt an existing directory, or change its options. `--config-from` copies `config.toml` from another account once. |
+| `multi-codex login NAME [-- ARGS]` | Run `codex login` with an account's environment; arguments after `--` go to `codex login`. Does not need `~/.local/bin` on `PATH`. |
 | `multi-codex proxy NAME PORT\|URL\|off\|inherit` | Set an account's proxy. |
 | `multi-codex remove NAME` | Unregister an account and delete its launcher. **The account directory is kept.** |
 | `multi-codex apply [-f FILE]` | Converge everything to the configuration (or to `FILE`). |
@@ -138,7 +141,7 @@ More questions are answered in the [FAQ](#faq).
 | `multi-codex restore NAME [--skip-process-check] [--accept-relogin]` | Undo `migrate-default`: move the account back to `~/.codex`. |
 | `multi-codex completion bash\|zsh\|fish` | Print a shell completion script. |
 
-Every write command accepts `--dry-run`. `list`, `usage` and `doctor` never change anything; with `--json` they print a single JSON object on stdout (with a `"version": 1` field) and keep warnings on stderr. Use `--json` in scripts: the table layout is not guaranteed to stay the same.
+Every write command accepts `--dry-run`. `init`, `add`, `proxy`, `remove`, `apply`, `bind`, `unbind` and `env` print only the items they change (or `already up to date`); `-v` / `--verbose` also prints unchanged items. `list`, `usage` and `doctor` never change anything; with `--json` they print a single JSON object on stdout (with a `"version": 1` field) and keep warnings on stderr. Use `--json` in scripts: the table layout is not guaranteed to stay the same.
 
 ### Login and usage
 
