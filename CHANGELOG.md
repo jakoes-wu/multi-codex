@@ -6,6 +6,24 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- `codex-auto`: generated next to the launchers while at least one directory
+  binding exists. It picks the account of the nearest bound directory, exactly
+  like `multi-codex run`, and starts that account's launcher; outside any bound
+  directory it runs plain `codex` (the default account) and says so on stderr.
+  It follows `bind`, `unbind`, `rename`, `remove`, `restore` and `apply`, and is
+  removed with the last binding. An account named `auto` cannot coexist with
+  bindings: rename it first.
+- `which [DIR]`: print which account a directory uses.
+- README: managing MCP servers with `multi-codex run NAME -- codex mcp ...`.
+
+### Changed
+
+- `restore` checks whether unregistering the account would conflict before it
+  moves any data, instead of stopping halfway with the data already back at
+  `~/.codex`.
+
 ## [0.9.0] - 2026-10-02
 
 **After upgrading, run `multi-codex apply` once.** The launcher template

@@ -46,6 +46,7 @@ COMMAND_GROUPS = (
         ("use", "show or change the default account (what ~/.codex points to)"),
         ("bind", "bind a directory to an account (no arguments: list bindings)"),
         ("unbind", "remove the binding of a directory"),
+        ("which", "show which account a directory uses (codex-auto picks the same one)"),
         ("code", "open VS Code for an account (experimental)"),
         ("app", "open the Codex desktop app for an account (macOS, experimental)"),
         ("proxy", "set the proxy of an account"),
@@ -190,6 +191,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_unbind.add_argument("dir", nargs="?", help="directory to unbind (default: current directory)")
     _add_dry_run(p_unbind)
     _add_verbose(p_unbind)
+
+    p_which = sub.add_parser("which", description=COMMAND_SUMMARY["which"])
+    p_which.add_argument("dir", nargs="?", help="directory to check (default: current directory)")
 
     p_code = sub.add_parser("code", description=COMMAND_SUMMARY["code"],
                             usage="multi-codex code NAME [PATH] [--bin CODE] [-- CODE_ARGS ...]")
@@ -355,6 +359,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             return cmd_app(args)
         if args.command == "path":
             return cmd_path(args.name)
+        if args.command == "which":
+            return cmd_which(args.dir)
         notice = migrate.pending_journal_notice()
         if notice:
             warn(notice)
@@ -1246,6 +1252,38 @@ def cmd_bind_list() -> int:
     for path in sorted(config.bindings):
         marker = "*" if effective and effective[0] == path else " "
         print("{} {}  {}".format(marker, path, config.bindings[path]))
+    return accounts.EXIT_OK
+
+
+def cmd_which(directory: Optional[str]) -> int:
+    """某目录会用哪个账号（feature-auto-launcher §5.1.3）。只读，不加锁。
+
+    规则与 run 省略账号名、以及 codex-auto 完全相同（binding.resolve）。stdout 只输出一行，便于脚本读取：
+    命中绑定时是账号名（登记时的大小写）；没有绑定时是默认账号的说明（与 `use` 不带参数相同，
+    以 `(` 开头表示没有已登记的默认账号）。依据写 stderr。
+    """
+    target = directory or os.getcwd()
+    if not os.path.isdir(target):
+        error("not a directory: {}".format(target))
+        return accounts.EXIT_ERROR
+    config, exists = load_config()
+    found = binding.resolve(config, target) if exists else None
+    if found is None:
+        print(switch.describe_default(config)[1])
+        hint("no binding for {}; plain codex uses the default account".format(binding.normalize_dir(target)))
+        if os.environ.get("CODEX_HOME"):
+            hint("CODEX_HOME is set in this shell, so plain codex uses {} instead".format(os.environ["CODEX_HOME"]))
+        return accounts.EXIT_OK
+    bound_dir, name = found
+    account = config.find(name)
+    if account is None:
+        error("account {!r} bound to {} is not registered; run `multi-codex unbind {}`".format(
+            name, bound_dir, bound_dir))
+        return accounts.EXIT_ERROR
+    print(account.name)
+    # 依据写 stderr（同 cmd_run）：actions.info 写 stdout，会破坏“stdout 只有一行”的约定。
+    sys.stdout.flush()
+    print("[multi-codex] bound to {}".format(bound_dir), file=sys.stderr)
     return accounts.EXIT_OK
 
 
