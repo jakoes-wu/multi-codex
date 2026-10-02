@@ -218,7 +218,7 @@ class EnvTest(ErgonomicsBase):
     def test_permissions(self):
         path = self.launcher_file("work")
         os.chmod(path, 0o775)
-        self.assertIn(" ok", self.ok("list").out.splitlines()[-1])
+        self.assertIn(" ok", self.ok("list", "--verbose").out.splitlines()[-1])
         self.assertNotIn("update launcher", self.ok("apply").out)
         self.ok("env", "work", "K=v")
         os.chmod(path, 0o755)

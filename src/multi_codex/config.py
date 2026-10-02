@@ -16,6 +16,8 @@ from .fsutil import atomic_write
 
 CONFIG_VERSION = 1
 DEFAULT_SHARED_ITEMS = ["AGENTS.md", "skills", "rules", "agents"]
+# `add/set NAME --shared` 不带目录、且 shared.dir 尚未设置时使用的共享目录；按原样写入配置，用到时再展开 `~`。
+DEFAULT_SHARED_DIR = "~/.codex-shared"
 
 # 以字母或数字开头：不会被当成命令行选项，也不会以 `.` 开头与 `.migration` 等目录混淆。
 NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._@+-]{0,63}$")

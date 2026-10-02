@@ -43,10 +43,10 @@ multi-codex --version
 
 Other ways: `pipx install multi-codex` (from PyPI), or on macOS `brew install jakoes-wu/tap/multi-codex`. Either way, the `codex-<name>` launchers still go to `~/.local/bin`.
 
-The `multi-codex` command and the `codex-<name>` launchers go to `~/.local/bin`. If your shell says `command not found`, that directory is not on your `PATH` yet; the installer prints a hint but never edits your shell profile. Add this line to `~/.zshrc` or `~/.bashrc` and open a new terminal:
+The `multi-codex` command and the `codex-<name>` launchers go to `~/.local/bin`. If your shell says `command not found`, that directory is not on your `PATH` yet. The installer, `multi-codex add` and `multi-codex doctor` then print the exact command for your shell (zsh, bash or fish), but never edit your shell profile themselves. In zsh, for example, run this once (bash on macOS uses `~/.bash_profile`, bash on Linux `~/.bashrc`) and open a new terminal:
 
 ```sh
-export PATH="$HOME/.local/bin:$PATH"
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
 ```
 
 In fish, run `fish_add_path ~/.local/bin` once instead.
@@ -66,7 +66,7 @@ Each command creates a directory (`~/.cx/work`) and a launcher (`codex-work`). A
 
 After `add`, multi-codex prints the next step: the login command, and a warning if `~/.local/bin` is not on your `PATH` yet. Running `multi-codex` without arguments shows these steps again.
 
-If an account should go through a proxy, give it a local port or a URL, for example `multi-codex add work --proxy 7901` (the same as `http://127.0.0.1:7901`). See [Proxy values](#proxy-values).
+If an account should go through a proxy, give it a local port or a URL, for example `multi-codex add work --proxy 7901` (the same as `http://127.0.0.1:7901`). See [Proxy values](#proxy-values). To change an existing account later, use `multi-codex set`, for example `multi-codex set work --proxy 7902`.
 
 ### 2. Log in once per account
 
@@ -87,7 +87,7 @@ codex-personal resume
 ### 4. Check that everything is right
 
 ```sh
-multi-codex list      # accounts, launcher state, logged-in e-mail and plan
+multi-codex list      # who is logged in, proxy, sharing, usage and anything that needs fixing
 multi-codex usage     # 5-hour and weekly usage; empty until you have used an account (--live asks right away)
 multi-codex doctor    # finds problems and prints the command that fixes each one
 ```
@@ -111,8 +111,8 @@ Without a name, the account is named after the e-mail address in `~/.codex/auth.
 | Open the desktop app with an account (macOS) | `multi-codex app work` | [VS Code and the desktop app](#vs-code-and-the-desktop-app-experimental) |
 | Change the account that plain `codex` and the Dock apps use | `multi-codex use work` (after `migrate-default`) | [Default account](#default-account) |
 | Always use one account inside a project | In the project directory: `multi-codex bind work`, then `multi-codex run` | [Directory bindings](#directory-bindings) |
-| Set or change an account's proxy | `multi-codex proxy work 7901` | [Proxy values](#proxy-values) |
-| Share `AGENTS.md`, skills and rules between accounts | Put them in `~/.codex-shared`, run `multi-codex init --shared-dir ~/.codex-shared`, then `multi-codex add work --shared` | [Shared resources](#shared-resources) |
+| Set or change an account's proxy | `multi-codex set work --proxy 7901` | [Proxy values](#proxy-values) |
+| Share `AGENTS.md`, skills and rules between accounts | Put them in `~/.codex-shared`, then run `multi-codex set work --shared` | [Shared resources](#shared-resources) |
 | Start a new account with another account's settings | `multi-codex add new --config-from work` | [Copying settings](#copying-settings-from-another-account) |
 | Give an account extra environment variables | `multi-codex env work KEY=VALUE` | [Environment variables](#per-account-environment-variables) |
 | Set up all accounts on a new machine | `curl -fsSL https://raw.githubusercontent.com/jakoes-wu/multi-codex/main/install.sh \| sh -s -- --config accounts.json` | [Declarative setup](#declarative-setup-with-apply) |
@@ -135,12 +135,13 @@ More questions are answered in the [FAQ](#faq).
 | ---- | ---- |
 | `multi-codex init [--root DIR] [--bin-dir DIR] [--shared-dir DIR] [--shared-items A,B]` | Create or change global settings. |
 | `multi-codex migrate-default [NAME] [--source DIR] [--copy] [--keep-backup] [--proxy P] [--skip-process-check] [--accept-relogin]` | Turn the default directory into an account. Without NAME, the e-mail address in its `auth.json` is used. |
-| `multi-codex add NAME [--proxy P] [--shared \| --no-shared] [--adopt] [--config-from OTHER]` | Add an account, adopt an existing directory, or change its options. `--config-from` copies `config.toml` from another account once. |
+| `multi-codex add NAME [--proxy P] [--shared [DIR] \| --no-shared] [--adopt] [--config-from OTHER]` | Add an account, adopt an existing directory, or change its options. `--config-from` copies `config.toml` from another account once. |
+| `multi-codex set NAME [--proxy P] [--shared [DIR] \| --no-shared] [--adopt] [--config-from OTHER]` | Change an existing account; same options as `add`, but never creates one. |
 | `multi-codex login NAME [-- ARGS]` | Run `codex login` with an account's environment; arguments after `--` go to `codex login`. Does not need `~/.local/bin` on `PATH`. |
 | `multi-codex proxy NAME PORT\|URL\|off\|inherit` | Set an account's proxy. |
 | `multi-codex remove NAME` | Unregister an account and delete its launcher. **The account directory is kept.** |
 | `multi-codex apply [-f FILE]` | Converge everything to the configuration (or to `FILE`). |
-| `multi-codex list [--json]` | Show accounts, the state of their launchers, and who is logged in. |
+| `multi-codex list [-v] [--json]` | Show accounts: who is logged in, proxy, sharing, usage and status. `-v` shows the full table. |
 | `multi-codex usage [NAME ...] [--live] [--timeout SEC] [--json]` | Show rate-limit usage. |
 | `multi-codex doctor [--json]` | Check the installation, configuration and accounts. Read-only. |
 | `multi-codex run [NAME] [-- COMMAND ...]` | Run a command (default: `codex`) with an account's environment. Without NAME, the account bound to the current directory is used. |
@@ -153,11 +154,23 @@ More questions are answered in the [FAQ](#faq).
 | `multi-codex restore NAME [--skip-process-check] [--accept-relogin]` | Undo `migrate-default`: move the account back to `~/.codex`. |
 | `multi-codex completion bash\|zsh\|fish` | Print a shell completion script. |
 
-Every write command accepts `--dry-run`. `init`, `add`, `proxy`, `remove`, `apply`, `bind`, `unbind` and `env` print only the items they change (or `already up to date`); `-v` / `--verbose` also prints unchanged items. `list`, `usage` and `doctor` never change anything; with `--json` they print a single JSON object on stdout (with a `"version": 1` field) and keep warnings on stderr. Use `--json` in scripts: the table layout is not guaranteed to stay the same.
+Every write command accepts `--dry-run`. `init`, `add`, `set`, `proxy`, `remove`, `apply`, `bind`, `unbind` and `env` print only the items they change (or `already up to date`); `-v` / `--verbose` also prints unchanged items. For `list`, `-v` means the full table instead. `list`, `usage` and `doctor` never change anything; with `--json` they print a single JSON object on stdout (with a `"version": 1` field) and keep warnings on stderr. Use `--json` in scripts: the table layout is not guaranteed to stay the same.
 
 ### Login and usage
 
-`list` adds two columns, LOGIN and PLAN, read from each account's local `auth.json`. No token is ever printed, and nothing is sent anywhere. LOGIN is the e-mail address, `api-key`, `-` (not logged in), `keyring` (credentials are in the system keyring and cannot be read from files) or `unreadable`. PLAN is the plan recorded when the current token was issued; it is updated the next time Codex refreshes the token. If two accounts are logged in as the same ChatGPT user and workspace, `list` warns you: they share one quota.
+`list` shows one line per account:
+
+```text
+default: work
+NAME  LOGIN          PROXY                  SHARED  USAGE           STATUS
+work  w@example.com  http://127.0.0.1:7901  yes     5h 23%, 7d 41%  ok
+home  -              inherit                no      -               not logged in
+run `multi-codex doctor` for details
+```
+
+LOGIN is read from each account's local `auth.json`: the e-mail address, `api-key`, `-` (not logged in), `keyring` (credentials are in the system keyring and cannot be read from files) or `unreadable`. No token is ever printed, and nothing is sent anywhere. USAGE is the last usage snapshot in the account's local session logs, the same data as `multi-codex usage` (`reset` means the window has reset since; `*` means `sessions` is shared with other accounts, so the numbers may belong to another one). STATUS lists what needs fixing (`missing-dir`, `launcher missing`/`stale`/`conflict`, `not logged in`); `doctor` explains each problem. If two accounts are logged in as the same ChatGPT user and workspace, `list` warns you: they share one quota.
+
+`list -v` prints the full table of earlier versions: the root, launcher and shared directories, and the DIR, LAUNCHER and PLAN columns. PLAN is the plan recorded when the current token was issued; it is updated the next time Codex refreshes the token.
 
 `multi-codex usage` reads the most recent rate-limit snapshot from each account's session logs (`sessions/` and `archived_sessions/`). It is offline but can be out of date; a window that has reset since the snapshot is shown as `reset since snapshot`.
 
@@ -313,13 +326,16 @@ If a migration stops with an error and you want to abandon it: the error message
 ## Shared resources
 
 ```sh
-multi-codex init --shared-dir ~/.codex-shared --shared-items AGENTS.md,skills,rules,agents
-multi-codex add work --shared
+multi-codex set work --shared
 ```
 
-Put the items you want to share into the shared directory first: items missing from it are skipped (`skip`), and nothing is linked for them. multi-codex creates the missing links and remembers which links it created. Turning sharing off removes only those links; links you made yourself are left alone. A real file or directory at a link location is a conflict and is never overwritten.
+Without a directory, `--shared` uses the shared directory already configured, or `~/.codex-shared` if none is set yet. Put the items you want to share there first: items missing from it are skipped (`skip`), and nothing is linked for them; if none of them is there, multi-codex says so. To choose which items are shared, use `multi-codex init --shared-items AGENTS.md,skills,rules,agents`.
 
-If you already linked an account to the shared directory by hand, `multi-codex add NAME --shared --adopt` takes those links over without recreating them: from then on, turning sharing off removes them as well. Only links that already point to the matching shared item are adopted.
+`--shared DIR` (for example `multi-codex set work --shared ~/my-shared`) changes the shared directory for **every** shared account, not only this one: their links move to the new directory, and links to items missing there are removed. Write the account name before `--shared`; `add --shared work` would take `work` as the directory.
+
+multi-codex creates the missing links and remembers which links it created. Turning sharing off removes only those links; links you made yourself are left alone. A real file or directory at a link location is a conflict and is never overwritten.
+
+If you already linked an account to the shared directory by hand, `multi-codex set NAME --shared --adopt` takes those links over without recreating them: from then on, turning sharing off removes them as well. Only links that already point to the matching shared item are adopted.
 
 ### What can be shared
 

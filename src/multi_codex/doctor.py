@@ -10,7 +10,7 @@ import shutil
 import subprocess
 from typing import List, NamedTuple, Optional, Tuple
 
-from . import accounts, identity, migrate, platform, switch
+from . import accounts, identity, migrate, platform, shellpath, switch
 from .actions import CONFLICT, CREATE, DELETE, SKIP, UPDATE
 from .config import ConfigError, load_config
 from .fsutil import KIND_DIR, KIND_LINK, KIND_MISSING, entry_kind, expand
@@ -110,7 +110,7 @@ def _check_path(bin_dir: str) -> Check:
     if platform.dir_on_path(bin_dir):
         return Check("path", OK, "{} is in PATH".format(bin_dir))
     return Check("path", WARN, "{} is not in PATH; codex-<name> launchers cannot be found".format(bin_dir),
-                 "add {} to PATH in your shell profile".format(bin_dir))
+                 shellpath.current_path_hint(bin_dir))
 
 
 def _check_env() -> Check:

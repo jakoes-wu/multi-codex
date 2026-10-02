@@ -12,6 +12,27 @@ All notable changes to this project are documented here. The format follows
 - Releases are also published to PyPI by a GitHub Actions workflow
   (Trusted Publishing): `pipx install multi-codex`.
 - README: badges and a demo animation.
+- `set NAME ...`: change an existing account; same options as `add`, but an
+  unknown name is an error (exit code 1) instead of a new account. `add` still
+  changes existing accounts as before.
+- `--shared [DIR]` for `add` and `set`: without a directory it keeps the
+  configured shared directory, or uses `~/.codex-shared` when none is set
+  (previously a conflict). With `DIR` it changes the shared directory of every
+  shared account. When none of the shared items exist there yet, a note says
+  what to put in it.
+- A mistyped command suggests the closest one, e.g.
+  `unknown command 'lsit'; did you mean 'list'?` (exit code 2 as before).
+- `list -v` / `--verbose`: the full table of earlier versions.
+
+### Changed
+
+- `list` prints a summary by default: the default account, then NAME, LOGIN,
+  PROXY, SHARED, USAGE (last local usage snapshot, no network) and STATUS
+  (what needs fixing), followed by a pointer to `doctor` when something does.
+  Use `list -v` for the old table, or `list --json` in scripts (unchanged).
+- When the launcher directory is not on `PATH`, `add`, `migrate-default`,
+  `doctor` and the installer print the command for your shell (zsh, bash or
+  fish) instead of a generic hint.
 
 ## [0.7.0] - 2026-10-01
 
