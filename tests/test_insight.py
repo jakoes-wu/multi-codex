@@ -434,7 +434,7 @@ class DoctorTest(InsightBase):
         os.rmdir(self.account_dir("gone"))
         checks, _, result = self.doctor(self.healthy_env())
         self.assertEqual(checks["account:none"]["status"], "warn")
-        self.assertEqual(checks["account:none"]["hint"], "codex-none login")
+        self.assertEqual(checks["account:none"]["hint"], "multi-codex login none")
         self.assertEqual(checks["account:gone"]["status"], "fail")
         self.assertEqual(result.code, 1, result)
 

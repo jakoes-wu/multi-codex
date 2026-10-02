@@ -59,9 +59,11 @@ multi-codex add personal
 ### 2. 每个账号登录一次
 
 ```sh
-codex-work login
-codex-personal login
+multi-codex login work
+multi-codex login personal
 ```
+
+`multi-codex login 名称` 用该账号的环境运行 `codex login`，`~/.local/bin` 还不在 `PATH` 中时也能用；`codex-work login` 效果相同。
 
 ### 3. 用启动命令代替 `codex`
 
@@ -84,10 +86,10 @@ multi-codex doctor    # 找出问题，并给出修复每个问题的命令
 
 ```sh
 # 先关掉 Codex：终端里的会话、VS Code、桌面端
-multi-codex migrate-default main
+multi-codex migrate-default
 ```
 
-这条命令把 `~/.codex` 移到 `~/.cx/main`，在 `~/.codex` 留一个软链，并创建 `codex-main`。直接运行的 `codex`、VS Code、桌面端，以及指向 `~/.codex` 下的旧绝对路径都照常可用。以后用 `multi-codex use work` 就能把默认账号换成别的账号。如果 Codex 把登录信息存在系统钥匙串里，命令会停下并说明原因。细节和撤销方法见“迁移 `~/.codex`”一节。
+不写名称时，账号名取 `~/.codex/auth.json` 里的邮箱；读不到邮箱（API key 登录、未登录、凭据在钥匙串里）时请写上名称，例如 `multi-codex migrate-default main`。这条命令把 `~/.codex` 移到 `~/.cx/<名称>`，在 `~/.codex` 留一个软链，并创建 `codex-<名称>`。直接运行的 `codex`、VS Code、桌面端，以及指向 `~/.codex` 下的旧绝对路径都照常可用。以后用 `multi-codex use work` 就能把默认账号换成别的账号。如果 Codex 把登录信息存在系统钥匙串里，命令会停下并说明原因。细节和撤销方法见“迁移 `~/.codex`”一节。
 
 ## 常用操作速查
 
@@ -110,7 +112,7 @@ multi-codex migrate-default main
 
 ## 使用前须知
 
-- **可以放心重复执行**：每条命令都能重跑，已经处于目标状态时输出 `unchanged`。
+- **可以放心重复执行**：每条命令都能重跑。写命令只打印有变化的项，没有变化时输出 `already up to date`；加 `-v` 可以看到全部项，包括没变的。
 - **不会覆盖你的文件**：遇到不是 multi-codex 创建的文件挡路时，只报告冲突，不做任何修改。
 - **迁移中断可以续跑**：重跑同一条命令，会按磁盘上的实际状态接着做。
 - **不是安全边界**：分开的目录只是让各账号的本地状态互不干扰，以你的用户身份运行的任何程序都能读取所有账号目录。
@@ -120,8 +122,9 @@ multi-codex migrate-default main
 | 命令 | 作用 |
 | ---- | ---- |
 | `multi-codex init [--root DIR] [--bin-dir DIR] [--shared-dir DIR] [--shared-items A,B]` | 创建或修改全局设置 |
-| `multi-codex migrate-default 名称 [--source DIR] [--copy] [--keep-backup] [--proxy P] [--skip-process-check] [--accept-relogin]` | 把默认目录迁移成账号 |
+| `multi-codex migrate-default [名称] [--source DIR] [--copy] [--keep-backup] [--proxy P] [--skip-process-check] [--accept-relogin]` | 把默认目录迁移成账号；省略名称时取其 `auth.json` 里的邮箱 |
 | `multi-codex add 名称 [--proxy P] [--shared \| --no-shared] [--adopt] [--config-from 其它账号]` | 新增账号、登记已有目录，或修改账号选项；`--config-from` 从另一个账号复制一次 `config.toml` |
+| `multi-codex login 名称 [-- 参数]` | 用账号的环境运行 `codex login`，`--` 之后的参数交给 `codex login`；不需要 `~/.local/bin` 在 `PATH` 中 |
 | `multi-codex proxy 名称 端口\|URL\|off\|inherit` | 设置账号的代理 |
 | `multi-codex remove 名称` | 注销账号，删除它的启动命令。**账号目录会保留** |
 | `multi-codex apply [-f 文件]` | 按配置（或指定文件）收敛全部账号 |
@@ -138,7 +141,7 @@ multi-codex migrate-default main
 | `multi-codex restore 名称 [--skip-process-check] [--accept-relogin]` | 撤销 `migrate-default`：把账号移回 `~/.codex` |
 | `multi-codex completion bash\|zsh\|fish` | 输出 shell 补全脚本 |
 
-所有写命令都支持 `--dry-run`。`list`、`usage`、`doctor` 不会修改任何东西；加 `--json` 时，stdout 上只输出一个 JSON 对象（带 `"version": 1` 字段），警告仍写到 stderr。脚本请使用 `--json`：表格格式不保证稳定。
+所有写命令都支持 `--dry-run`。`init`、`add`、`proxy`、`remove`、`apply`、`bind`、`unbind`、`env` 只打印有变化的项（没有变化时输出 `already up to date`），加 `-v` / `--verbose` 时连没变的项也打印。`list`、`usage`、`doctor` 不会修改任何东西；加 `--json` 时，stdout 上只输出一个 JSON 对象（带 `"version": 1` 字段），警告仍写到 stderr。脚本请使用 `--json`：表格格式不保证稳定。
 
 ### 登录身份与额度
 

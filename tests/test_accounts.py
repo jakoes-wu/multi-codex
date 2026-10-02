@@ -191,8 +191,8 @@ class SharedTest(CliTestCase):
         self.ok("add", "work")
         account = os.path.join(self.root, "work")
         os.symlink(os.path.join(self.shared, "skills"), os.path.join(account, "skills"))
-        result = self.ok("add", "work", "--shared")
-        # 动作行里的路径缩写成 ~/…（feature-onboarding-hints A6）。
+        # -v：默认不打印 unchanged 行（feature-onboarding-commands B3）；路径缩写成 ~/…（feature-onboarding-hints A6）。
+        result = self.ok("add", "work", "--shared", "-v")
         self.assertIn("unchanged shared-link ~/.cx/work/skills", result.out)
         self.assertEqual(self.managed_links("work"), ["AGENTS.md"])
         self.ok("add", "work", "--no-shared")

@@ -31,6 +31,7 @@ class UsageError(Exception):
 COMMAND_GROUPS = (
     ("Get started", (
         ("add", "add an account, adopt an existing directory, or change its options"),
+        ("login", "log in to an account (runs codex login with its environment)"),
         ("migrate-default", "turn the default ~/.codex into a named account"),
         ("list", "show accounts, their status and who is logged in"),
         ("doctor", "check the installation, configuration and accounts (read-only)"),
@@ -59,7 +60,7 @@ COMMAND_SUMMARY = {name: summary for _, commands in COMMAND_GROUPS for name, sum
 
 HELP_EXAMPLES = """examples:
   multi-codex add work          create account "work" and its launcher codex-work
-  codex-work login              log in once
+  multi-codex login work        log in once
   multi-codex list              who is logged in where
   multi-codex use work          make plain codex and the Dock apps use "work"
 """
@@ -95,9 +96,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_init.add_argument("--shared-items", help="comma-separated items to share "
                         "(default {})".format(",".join(DEFAULT_SHARED_ITEMS)))
     _add_dry_run(p_init)
+    _add_verbose(p_init)
 
     p_mig = sub.add_parser("migrate-default", description=COMMAND_SUMMARY["migrate-default"])
-    p_mig.add_argument("name")
+    # 省略时从源目录的 auth.json 读邮箱作为账号名（_derive_migrate_name）。
+    p_mig.add_argument("name", nargs="?")
     p_mig.add_argument("--source", help="directory to migrate (default ~/.codex)")
     p_mig.add_argument("--copy", action="store_true",
                        help="copy and verify instead of renaming (used automatically across file systems)")
@@ -125,19 +128,23 @@ def build_parser() -> argparse.ArgumentParser:
                        help="take over existing links that already point to the shared items, "
                             "so that turning sharing off later removes them too")
     _add_dry_run(p_add)
+    _add_verbose(p_add)
 
     p_proxy = sub.add_parser("proxy", description=COMMAND_SUMMARY["proxy"])
     p_proxy.add_argument("name")
     p_proxy.add_argument("value", help="port (e.g. 7901), URL, off or inherit")
     _add_dry_run(p_proxy)
+    _add_verbose(p_proxy)
 
     p_remove = sub.add_parser("remove", description=COMMAND_SUMMARY["remove"])
     p_remove.add_argument("name")
     _add_dry_run(p_remove)
+    _add_verbose(p_remove)
 
     p_apply = sub.add_parser("apply", description=COMMAND_SUMMARY["apply"])
     p_apply.add_argument("-f", "--file", help="use this file as the new configuration")
     _add_dry_run(p_apply)
+    _add_verbose(p_apply)
 
     p_list = sub.add_parser("list", description=COMMAND_SUMMARY["list"])
     _add_json(p_list)
@@ -159,6 +166,11 @@ def build_parser() -> argparse.ArgumentParser:
     # 补全脚本在按 Tab 时调用它读取账号名；不是给人用的，所以不出现在帮助里。
     p_comp.add_argument("--list-accounts", action="store_true", help=argparse.SUPPRESS)
 
+    # 不依赖 PATH：启动命令目录还没加进 PATH 时，codex-<名> login 找不到，这条照样能用。
+    p_login = sub.add_parser("login", description=COMMAND_SUMMARY["login"],
+                             usage="multi-codex login NAME [-- ARGS ...]")
+    p_login.add_argument("name")
+
     p_run = sub.add_parser("run", description=COMMAND_SUMMARY["run"],
                            usage="multi-codex run [NAME] [-- COMMAND [ARG ...]]")
     # 省略 NAME 时按当前目录的绑定选账号（bind）。
@@ -168,10 +180,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_bind.add_argument("name", nargs="?")
     p_bind.add_argument("dir", nargs="?", help="directory to bind (default: current directory)")
     _add_dry_run(p_bind)
+    _add_verbose(p_bind)
 
     p_unbind = sub.add_parser("unbind", description=COMMAND_SUMMARY["unbind"])
     p_unbind.add_argument("dir", nargs="?", help="directory to unbind (default: current directory)")
     _add_dry_run(p_unbind)
+    _add_verbose(p_unbind)
 
     p_code = sub.add_parser("code", description=COMMAND_SUMMARY["code"],
                             usage="multi-codex code NAME [PATH] [--bin CODE] [-- CODE_ARGS ...]")
@@ -192,6 +206,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_env.add_argument("--unset", action="append", default=[], metavar="KEY", help="variable to remove")
     p_env.add_argument("--clear", action="store_true", help="remove all variables of the account")
     _add_dry_run(p_env)
+    _add_verbose(p_env)
 
     p_use = sub.add_parser("use", description=COMMAND_SUMMARY["use"])
     p_use.add_argument("name", nargs="?")
@@ -229,13 +244,18 @@ def _add_dry_run(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--dry-run", action="store_true", help="show the planned actions without changing anything")
 
 
+def _add_verbose(parser: argparse.ArgumentParser) -> None:
+    # 只加给经 dispatch 末尾 converge 输出动作行的写命令；默认不打印 unchanged 行。
+    parser.add_argument("-v", "--verbose", action="store_true", help="also show items that are unchanged")
+
+
 def _split_run_command(argv: List[str]) -> Tuple[List[str], List[str]]:
     """`run NAME -- CMD ...`：在第一个 `--` 处分开，`--` 之后原样作为要运行的命令。
 
     不交给 argparse 的 REMAINDER：不同 Python 版本对 `--` 的处理不一致（3.9 起会吞掉第一个 `--`），
     `run a -- -- x` 这种命令就会被解析成不同的样子。
     """
-    if argv[:1] in (["run"], ["code"]) and "--" in argv:
+    if argv[:1] in (["run"], ["code"], ["login"]) and "--" in argv:
         index = argv.index("--")
         return argv[:index], argv[index + 1:]
     return argv, []
@@ -268,6 +288,9 @@ def main(argv: Optional[List[str]] = None) -> int:
             return cmd_completion(args, parser)
         if args.command == "run":
             return cmd_run(args.name, run_command)
+        if args.command == "login":
+            # `--` 之后的参数原样交给 codex login，本工具不校验（取决于上游支持哪些参数）。
+            return cmd_run(args.name, ["codex", "login"] + run_command)
         if args.command == "code":
             return cmd_code(args, run_command)
         if args.command == "app":
@@ -337,7 +360,7 @@ def _blocked_by_migration(args: argparse.Namespace, notice: Optional[str]) -> bo
 
 def dispatch(args: argparse.Namespace) -> int:
     if args.command == "migrate-default":
-        name = _checked_name(args.name)
+        name = _checked_name(args.name if args.name is not None else _derive_migrate_name(args.source))
         proxy = _checked_proxy(args.proxy) if args.proxy is not None else None
         code = migrate.migrate_default(name, args.source, args.copy, args.keep_backup, proxy,
                                        args.skip_process_check, args.dry_run,
@@ -445,15 +468,54 @@ def dispatch(args: argparse.Namespace) -> int:
                                       args.accept_relogin, args.dry_run)
 
     code = accounts.converge(old, new, config_exists=exists, dry_run=args.dry_run,
-                             orphan_scope=orphan_scope, adopt_accounts=adopt_accounts, extra_actions=extra_actions)
+                             orphan_scope=orphan_scope, adopt_accounts=adopt_accounts, extra_actions=extra_actions,
+                             verbose=args.verbose)
     if binding_change is not None:
-        if code == accounts.EXIT_OK:
+        # 绑定没变时配置也没变，execute 已经说了 already up to date，非 verbose 不再重复。
+        if code == accounts.EXIT_OK and (args.verbose or binding_change.status != UNCHANGED):
             print_action(binding_change, dry_run=args.dry_run)
-        else:
+        elif code != accounts.EXIT_OK:
             info("binding not changed because of the errors above")
     if args.command == "add" and code == accounts.EXIT_OK and not args.dry_run:
         _hint_after_setup(new, args.name, check_login=True)
     return code
+
+
+# identity.read_identity 的 login 取值 → 读不出邮箱的原因（给 _derive_migrate_name 的报错用）。
+_NO_EMAIL_REASONS = {
+    identity.LOGIN_LOGGED_OUT: "not logged in",
+    identity.LOGIN_APIKEY: "logged in with an API key (no e-mail)",
+    identity.LOGIN_KEYRING: "credentials are in the system keyring",
+    identity.LOGIN_UNREADABLE: "auth.json cannot be read",
+    identity.LOGIN_CHATGPT: "the login has no e-mail",
+}
+
+
+def _derive_migrate_name(source: Optional[str]) -> str:
+    """`migrate-default` 省略 NAME 时推导账号名（feature-onboarding-commands B2）。
+
+    有未完成的迁移时用记录里的名称：中途 ~/.codex 可能已被移走、读不到 auth.json，
+    而续跑本来就必须用记录里的名称（migrate._resume 会核对）。
+    否则读源目录 auth.json 里的邮箱；读不到或不是合法账号名时抛 UsageError（退出码 2），
+    什么都不动——不把邮箱改写成“合法”的名字，生成的名字用户预料不到，还可能撞上已有账号。
+    """
+    journal = migrate.load_journal()
+    if journal is not None:
+        return journal["name"]
+    source_path = expand(source or platform.default_source())
+    found = identity.read_identity(source_path)
+    reason = _NO_EMAIL_REASONS.get(found.login, "unrecognized login type")
+    if found.login == identity.LOGIN_CHATGPT and found.email:
+        try:
+            validate_name(found.email)
+        except ValueError:
+            reason = "e-mail {} is not a valid account name".format(found.email)
+        else:
+            info("using account name {!r} from {}".format(
+                found.email, display_path(os.path.join(source_path, "auth.json"))))
+            return found.email
+    raise UsageError("cannot tell the account name from {}: {}; pass a NAME, "
+                     "e.g. multi-codex migrate-default main".format(display_path(source_path), reason))
 
 
 def _hint_after_setup(config: Config, name: str, check_login: bool) -> None:
@@ -470,11 +532,8 @@ def _hint_after_setup(config: Config, name: str, check_login: bool) -> None:
         found = identity.read_identity(accounts.account_dir(config, account.name))
         # 只提示“未登录”；keyring、unreadable 等情况交给 doctor，那里有完整说明。
         if found.login == identity.LOGIN_LOGGED_OUT:
-            if on_path:
-                hint("next: log in with `codex-{} login`".format(account.name))
-            else:
-                # codex-<名> 现在还找不到；run 用与启动命令相同的环境，不依赖 PATH。
-                hint("next: log in with `multi-codex run {} -- codex login`".format(account.name))
+            # 用 multi-codex login 而不是 codex-<名> login：前者不依赖 PATH，两种情况都能照做。
+            hint("next: log in with `multi-codex login {}`".format(account.name))
     if not on_path:
         sys.stdout.flush()  # 同 hint()：让警告排在动作行之后
         warn("{} is not on PATH, so `codex-{}` will not be found; add it in your shell profile, "
@@ -503,10 +562,10 @@ def print_getting_started() -> None:
     else:
         print("Get started:")
         print("  multi-codex add NAME          create an account and its launcher codex-NAME")
-        print("  codex-NAME login              log in once")
+        print("  multi-codex login NAME        log in once")
         print("  codex-NAME                    use it instead of codex")
         if entry_kind(switch.default_link()) == KIND_DIR:
-            print("  multi-codex migrate-default NAME   keep your current ~/.codex login as an account")
+            print("  multi-codex migrate-default [NAME]   keep your current ~/.codex login as an account")
     print()
     print("Run `multi-codex -h` for all commands.")
 

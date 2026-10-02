@@ -6,6 +6,21 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- `login NAME [-- ARGS]`: run `codex login` with an account's environment. It
+  does not need the launcher directory on `PATH`; the next-step hints and
+  `doctor` now suggest it.
+- `migrate-default` without a name uses the e-mail address in the source
+  directory's `auth.json`; when there is none, it asks for a name (exit code 2).
+- `-v` / `--verbose` for `init`, `add`, `proxy`, `remove`, `apply`, `bind`,
+  `unbind` and `env`.
+
+### Changed
+
+- Write commands no longer print `unchanged` lines by default; when nothing
+  changes they print `already up to date`. Use `-v` for the previous output.
+
 ## [0.6.0] - 2026-10-01
 
 ### Added
