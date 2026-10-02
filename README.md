@@ -2,6 +2,11 @@
 
 **English** | [简体中文](README.zh-CN.md)
 
+[![Release](https://img.shields.io/github/v/release/jakoes-wu/multi-codex)](https://github.com/jakoes-wu/multi-codex/releases)
+[![CI](https://github.com/jakoes-wu/multi-codex/actions/workflows/ci.yml/badge.svg)](https://github.com/jakoes-wu/multi-codex/actions/workflows/ci.yml)
+![Python](https://img.shields.io/badge/python-3.8%2B-blue)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+
 Use several [Codex CLI](https://github.com/openai/codex) accounts on one machine, at the same time. Each account keeps its own login, settings, history and, if you like, its own proxy. No more logging out and in again.
 
 ```sh
@@ -9,6 +14,10 @@ codex-work          # Codex, logged in with your work account
 codex-personal      # Codex, logged in with your personal account, in another terminal
 multi-codex list    # which account is logged in as whom
 ```
+
+![multi-codex demo: add two accounts and list them](https://raw.githubusercontent.com/jakoes-wu/multi-codex/main/docs/assets/demo.gif)
+
+<sub>The accounts in the demo are examples.</sub>
 
 ## How it works
 
@@ -30,6 +39,8 @@ You need macOS or Linux (Windows support is planned; inside WSL, use the Linux i
 curl -fsSL https://raw.githubusercontent.com/jakoes-wu/multi-codex/main/install.sh | sh
 multi-codex --version
 ```
+
+On macOS you can use Homebrew instead: `brew install jakoes-wu/tap/multi-codex`. The `codex-<name>` launchers still go to `~/.local/bin`.
 
 The `multi-codex` command and the `codex-<name>` launchers go to `~/.local/bin`. If your shell says `command not found`, that directory is not on your `PATH` yet; the installer prints a hint but never edits your shell profile. Add this line to `~/.zshrc` or `~/.bashrc` and open a new terminal:
 
