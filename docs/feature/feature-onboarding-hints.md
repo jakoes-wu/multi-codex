@@ -1,6 +1,6 @@
 # 降低新手门槛：下一步提示、上手指引、分组帮助、拼写提示与报错改进（v0.6）
 
-> 2026-10-01 注记：代码已落地（未提交，等待编译机验证）。
+> 2026-10-01 注记：已随 v0.6.0 发布（PR #15，main `b620180`）。编译机 Python 3.8.10 独立验证两次通过。
 > - 公共函数：`fsutil.display_path`、`actions.hint`、`platform.dir_on_path`、`Config.not_registered`（`src/multi_codex/config.py`）。
 > - 命令行：`src/multi_codex/cli.py` 中的 `COMMAND_GROUPS`、`print_getting_started`、`_hint_after_setup`、`cmd_use_show`。
 > - 安装脚本：`install.sh` 末尾的下一步与补全提示。
