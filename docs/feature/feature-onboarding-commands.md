@@ -1,6 +1,6 @@
 # 新手门槛 B 组：login 子命令、migrate-default 名称可省略、写命令只打印变化（v0.7）
 
-> 2026-10-01 注记：代码已落地（未提交，等待编译机验证）。
+> 2026-10-01 注记：已随 v0.7.0 发布（PR #18，main `84243ab`）。编译机 Python 3.8.10 独立验证两次通过。
 > - B1：`src/multi_codex/cli.py` 的 `login` 子命令与 `main` 中的分派；补全见 `completion.py` 的 `ACCOUNT_COMMANDS` 与三处 `--` 判断。
 > - B2：`cli.py` 的 `_derive_migrate_name`、`_NO_EMAIL_REASONS`。
 > - B3：`accounts.py` 的 `execute(verbose=...)`、`converge(verbose=...)`；`cli.py` 的 `_add_verbose`。
