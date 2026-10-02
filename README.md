@@ -4,6 +4,7 @@
 
 [![Release](https://img.shields.io/github/v/release/jakoes-wu/multi-codex)](https://github.com/jakoes-wu/multi-codex/releases)
 [![CI](https://github.com/jakoes-wu/multi-codex/actions/workflows/ci.yml/badge.svg)](https://github.com/jakoes-wu/multi-codex/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/multi-codex)](https://pypi.org/project/multi-codex/)
 ![Python](https://img.shields.io/badge/python-3.8%2B-blue)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
@@ -40,7 +41,7 @@ curl -fsSL https://raw.githubusercontent.com/jakoes-wu/multi-codex/main/install.
 multi-codex --version
 ```
 
-On macOS you can use Homebrew instead: `brew install jakoes-wu/tap/multi-codex`. The `codex-<name>` launchers still go to `~/.local/bin`.
+Other ways: `pipx install multi-codex` (from PyPI), or on macOS `brew install jakoes-wu/tap/multi-codex`. Either way, the `codex-<name>` launchers still go to `~/.local/bin`.
 
 The `multi-codex` command and the `codex-<name>` launchers go to `~/.local/bin`. If your shell says `command not found`, that directory is not on your `PATH` yet; the installer prints a hint but never edits your shell profile. Add this line to `~/.zshrc` or `~/.bashrc` and open a new terminal:
 
@@ -419,7 +420,7 @@ cd multi-codex
 ./install.sh
 ```
 
-With pipx: `pipx install git+https://github.com/jakoes-wu/multi-codex`.
+With pipx: `pipx install multi-codex` (the latest release from PyPI), or `pipx install git+https://github.com/jakoes-wu/multi-codex` for the current `main` branch.
 
 The tool goes to `~/.local/share/multi-codex` and the `multi-codex` command to `~/.local/bin`. Use `--prefix DIR` to install somewhere else. Run `./install.sh --help` for all options.
 
