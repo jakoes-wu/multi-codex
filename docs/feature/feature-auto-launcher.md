@@ -1,6 +1,6 @@
 # multi-codex v0.10：按目录绑定自动选账号（`codex-auto` 与 `which`）
 
-> 2026-10-02 注记：方案已定（plan-review：第 1 轮 2 高 4 中 8 低，第 2 轮 0 高 1 中 4 低，均已修订），代码待落地。基线：main `6381b70`（v0.9.0）。
+> 2026-10-02 注记：已落地（PR #26，main `a1d595f`），随 v0.10.0 发布。plan-review 两轮收敛（第 1 轮 2 高 4 中 8 低，第 2 轮 0 高 1 中 4 低）。主要实现位置：`src/multi_codex/router.py`（`render`、`is_router`、`same_file`）；`src/multi_codex/accounts.py` 的 `_plan_router`；`src/multi_codex/switch.py` 的 `restore_account` 预检与 `_unregistered`；`src/multi_codex/cli.py` 的 `cmd_which`。测试：`tests/test_router.py`、`tests/test_switch.py`。基线：main `6381b70`（v0.9.0）。
 >
 > 用户的决定（2026-10-02）：
 >
