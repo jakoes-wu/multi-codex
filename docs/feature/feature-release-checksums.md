@@ -7,7 +7,7 @@
 
 ## 1. 背景
 
-`install.sh` 的远程安装从 `https://codeload.github.com/<repo>/tar.gz/<ref>` 下载 GitHub 自动生成的源码包（`install.sh:123-137`），下载后没有任何完整性校验。路线中的 U14（`~/.claude-shared/playbook/multi-codex-competitors.md` §5.3）要求：release 附带校验和，`install.sh` 下载后先校验。竞品 xjoker/codex-switch 在自更新时会校验 SHA-256。
+`install.sh` 的远程安装从 `https://codeload.github.com/<repo>/tar.gz/<ref>` 下载 GitHub 自动生成的源码包（`install.sh:123-137`），下载后没有任何完整性校验。路线中的 U14 要求：release 附带校验和，`install.sh` 下载后先校验。开源项目 xjoker/codex-switch 在自更新时会校验 SHA-256。
 
 GitHub 自动生成的源码包不保证字节稳定，不能拿来预先计算校验和。所以发布时要另外生成一个固定的包，作为 release 附件上传。
 
