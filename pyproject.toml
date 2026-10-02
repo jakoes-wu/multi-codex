@@ -9,12 +9,18 @@ description = "Run several Codex CLI accounts side by side: separate CODEX_HOME 
 readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.8"
+keywords = ["codex", "codex-cli", "openai", "multi-account", "account-switcher", "proxy", "cli"]
 classifiers = [
     "Environment :: Console",
+    "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
     "Operating System :: MacOS",
     "Operating System :: POSIX :: Linux",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Utilities",
 ]
 
 [project.scripts]
@@ -22,6 +28,8 @@ multi-codex = "multi_codex.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/jakoes-wu/multi-codex"
+Changelog = "https://github.com/jakoes-wu/multi-codex/blob/main/CHANGELOG.md"
+Issues = "https://github.com/jakoes-wu/multi-codex/issues"
 
 [tool.setuptools.dynamic]
 version = {attr = "multi_codex.__version__"}

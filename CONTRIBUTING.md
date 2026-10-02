@@ -40,6 +40,14 @@ resuming from it is covered.
 4. Confirm both assets are on the release page and that
    `curl -fsSL .../install.sh | sh` prints `verified sha256` before announcing
    the release. Until the assets are uploaded, installs are unverified.
+5. The `Publish to PyPI` workflow builds the sdist and wheel and uploads them
+   through PyPI Trusted Publishing (environment `pypi`). To upload an earlier
+   tag, run it by hand with `gh workflow run pypi.yml -f tag=vX.Y.Z`.
+6. Update the Homebrew formula in
+   [jakoes-wu/homebrew-tap](https://github.com/jakoes-wu/homebrew-tap):
+   set `url` to the new `multi-codex-vX.Y.Z.tar.gz` asset and `sha256` to the
+   value in the release's `SHA256SUMS`, then check it with
+   `brew install --build-from-source jakoes-wu/tap/multi-codex && brew test multi-codex`.
 
 ## Pull requests
 
