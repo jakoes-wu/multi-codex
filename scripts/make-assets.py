@@ -19,6 +19,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MONO_FONT = "/System/Library/Fonts/Menlo.ttc"
@@ -73,6 +74,19 @@ def capture_session():
             path = os.path.join(home, ".cx", name, "auth.json")
             with open(path, "w") as handle:
                 json.dump(data, handle)
+        # 示例额度：真实使用时 Codex 把额度快照写进会话日志，list 的 USAGE 列只读本机这份记录。
+        # 格式与 Codex 写的一致（紧凑 JSON，usage 按 `"rate_limits":{` 片段预过滤）。
+        for name, five_hour, weekly in (("work", 23.0, 41.0), ("personal", 8.0, 15.0)):
+            later = int(time.time()) + 3600
+            limits = {"limit_id": "codex",
+                      "primary": {"used_percent": five_hour, "window_minutes": 300, "resets_at": later},
+                      "secondary": {"used_percent": weekly, "window_minutes": 10080, "resets_at": later + 86400}}
+            record = {"timestamp": time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime()), "type": "event_msg",
+                      "payload": {"type": "token_count", "info": None, "rate_limits": limits}}
+            log_dir = os.path.join(home, ".cx", name, "sessions", "2026", "01", "01")
+            os.makedirs(log_dir)
+            with open(os.path.join(log_dir, "rollout-demo.jsonl"), "w") as handle:
+                handle.write(json.dumps(record, separators=(",", ":")) + "\n")
         session.append(("# log in once per account: multi-codex login work", []))
         session.append(("multi-codex list", run("list")))
         session.append(("# codex-work and codex-personal now run side by side", []))
