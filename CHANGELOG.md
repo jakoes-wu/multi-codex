@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-10-02
+
 **After upgrading, run `multi-codex apply` once.** The launcher template
 changed, so existing launchers show as `launcher stale` and `usage --live`
 refuses to run until they are rewritten; they keep working meanwhile.
@@ -199,7 +201,8 @@ First release (macOS and Linux).
 - Optional shared resources linked from one directory into selected accounts.
 - `install.sh` with `--config`, `--prefix` and `--uninstall`.
 
-[Unreleased]: https://github.com/jakoes-wu/multi-codex/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/jakoes-wu/multi-codex/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/jakoes-wu/multi-codex/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/jakoes-wu/multi-codex/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/jakoes-wu/multi-codex/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/jakoes-wu/multi-codex/compare/v0.5.0...v0.6.0

@@ -1,6 +1,6 @@
 # multi-codex v0.9：隔离与共享更安全
 
-> 2026-10-02 注记：方案已定（plan-review 两轮收敛：第 1 轮 0 高 4 中 10 低，第 2 轮 0 高 0 中 4 低，均已修订），代码待落地。基线：main `7f0e4cf`（v0.8.0）。
+> 2026-10-02 注记：已落地（PR #24，main `765788d`），随 v0.9.0 发布。plan-review 两轮收敛（第 1 轮 0 高 4 中 10 低，第 2 轮 0 高 0 中 4 低）。主要实现位置：`src/multi_codex/launcher.py` 的 `render`（unset 行）；`src/multi_codex/config.py` 的 `is_unshareable`、`Account.shared_exclude` / `dir_name`、`_check_dir_names`；`src/multi_codex/accounts.py` 的 `account_dir`、`dir_conflicts`、`plan`；`src/multi_codex/shared.py` 的 `plan_shared`；`src/multi_codex/cli.py` 的 `_apply_shared_exclude`、`_rename_config`、`_load_apply_file`；`src/multi_codex/switch.py` 的 `restore_account`。测试：`tests/test_isolation.py`。基线：main `7f0e4cf`（v0.8.0）。
 >
 > 用户的决定（2026-10-02）：
 >
