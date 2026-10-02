@@ -43,10 +43,10 @@ multi-codex --version
 
 其它安装方式：`pipx install multi-codex`（从 PyPI 安装），或者在 macOS 上用 `brew install jakoes-wu/tap/multi-codex`。无论哪种方式，各账号的 `codex-<名称>` 启动命令都放在 `~/.local/bin`。
 
-`multi-codex` 命令和各账号的 `codex-<名称>` 启动命令都在 `~/.local/bin`。如果 shell 提示 `command not found`，说明这个目录还不在 `PATH` 中；安装脚本只给出提示，不会修改你的 shell 配置文件。把下面这行加到 `~/.zshrc` 或 `~/.bashrc`，再打开一个新终端：
+`multi-codex` 命令和各账号的 `codex-<名称>` 启动命令都在 `~/.local/bin`。如果 shell 提示 `command not found`，说明这个目录还不在 `PATH` 中。这时安装脚本、`multi-codex add` 和 `multi-codex doctor` 会按你的 shell（zsh、bash 或 fish）给出一行可以直接执行的命令，但不会自己修改 shell 配置文件。以 zsh 为例，执行一次下面的命令，再打开一个新终端（macOS 上的 bash 写 `~/.bash_profile`，Linux 上的 bash 写 `~/.bashrc`）：
 
 ```sh
-export PATH="$HOME/.local/bin:$PATH"
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
 ```
 
 fish 用户改为执行一次 `fish_add_path ~/.local/bin`。
@@ -66,7 +66,7 @@ multi-codex add personal
 
 `add` 之后，multi-codex 会提示下一步：登录要执行的命令；`~/.local/bin` 还不在 `PATH` 中时，也会给出警告。不带参数运行 `multi-codex` 可以再次看到这些步骤。
 
-某个账号需要走代理时，给它一个本地端口或代理 URL，例如 `multi-codex add work --proxy 7901`（等同于 `http://127.0.0.1:7901`），见“代理取值”一节。
+某个账号需要走代理时，给它一个本地端口或代理 URL，例如 `multi-codex add work --proxy 7901`（等同于 `http://127.0.0.1:7901`），见“代理取值”一节。以后要修改已有账号，用 `multi-codex set`，例如 `multi-codex set work --proxy 7902`。
 
 ### 2. 每个账号登录一次
 
@@ -87,7 +87,7 @@ codex-personal resume
 ### 4. 检查是否一切正常
 
 ```sh
-multi-codex list      # 账号、启动命令的状态、登录的邮箱和套餐
+multi-codex list      # 谁登录在哪个账号、代理、共享、额度，以及需要处理的问题
 multi-codex usage     # 5 小时和每周额度用量；账号用过之后才有数据，--live 可立即查询
 multi-codex doctor    # 找出问题，并给出修复每个问题的命令
 ```
@@ -111,8 +111,8 @@ multi-codex migrate-default
 | 用某个账号打开桌面端（macOS） | `multi-codex app work` | 按账号打开 VS Code 与桌面端 |
 | 换掉直接运行 `codex` 和从 Dock 启动时用的账号 | `multi-codex use work`（需先 `migrate-default`） | 默认账号 |
 | 在某个项目里固定使用一个账号 | 在项目目录执行 `multi-codex bind work`，之后用 `multi-codex run` | 目录绑定账号 |
-| 设置或修改账号的代理 | `multi-codex proxy work 7901` | 代理取值 |
-| 在账号之间共享 `AGENTS.md`、skills、rules | 把要共享的内容放进 `~/.codex-shared`，执行 `multi-codex init --shared-dir ~/.codex-shared`，再 `multi-codex add work --shared` | 共享资源 |
+| 设置或修改账号的代理 | `multi-codex set work --proxy 7901` | 代理取值 |
+| 在账号之间共享 `AGENTS.md`、skills、rules | 把要共享的内容放进 `~/.codex-shared`，再执行 `multi-codex set work --shared` | 共享资源 |
 | 新账号沿用另一个账号的配置 | `multi-codex add new --config-from work` | 从另一个账号复制配置 |
 | 给账号加额外的环境变量 | `multi-codex env work KEY=VALUE` | 每个账号的环境变量 |
 | 在新机器上一次建好所有账号 | `curl -fsSL https://raw.githubusercontent.com/jakoes-wu/multi-codex/main/install.sh \| sh -s -- --config accounts.json` | 用 `apply` 声明式部署 |
@@ -135,12 +135,13 @@ multi-codex migrate-default
 | ---- | ---- |
 | `multi-codex init [--root DIR] [--bin-dir DIR] [--shared-dir DIR] [--shared-items A,B]` | 创建或修改全局设置 |
 | `multi-codex migrate-default [名称] [--source DIR] [--copy] [--keep-backup] [--proxy P] [--skip-process-check] [--accept-relogin]` | 把默认目录迁移成账号；省略名称时取其 `auth.json` 里的邮箱 |
-| `multi-codex add 名称 [--proxy P] [--shared \| --no-shared] [--adopt] [--config-from 其它账号]` | 新增账号、登记已有目录，或修改账号选项；`--config-from` 从另一个账号复制一次 `config.toml` |
+| `multi-codex add 名称 [--proxy P] [--shared [目录] \| --no-shared] [--adopt] [--config-from 其它账号]` | 新增账号、登记已有目录，或修改账号选项；`--config-from` 从另一个账号复制一次 `config.toml` |
+| `multi-codex set 名称 [--proxy P] [--shared [目录] \| --no-shared] [--adopt] [--config-from 其它账号]` | 修改已有账号；选项与 `add` 相同，但不会新建账号 |
 | `multi-codex login 名称 [-- 参数]` | 用账号的环境运行 `codex login`，`--` 之后的参数交给 `codex login`；不需要 `~/.local/bin` 在 `PATH` 中 |
 | `multi-codex proxy 名称 端口\|URL\|off\|inherit` | 设置账号的代理 |
 | `multi-codex remove 名称` | 注销账号，删除它的启动命令。**账号目录会保留** |
 | `multi-codex apply [-f 文件]` | 按配置（或指定文件）收敛全部账号 |
-| `multi-codex list [--json]` | 列出账号、启动命令的状态和登录身份 |
+| `multi-codex list [-v] [--json]` | 列出账号：登录身份、代理、共享、额度和状态；`-v` 输出完整表格 |
 | `multi-codex usage [名称 ...] [--live] [--timeout 秒] [--json]` | 显示额度用量 |
 | `multi-codex doctor [--json]` | 检查安装、配置和各账号，只读 |
 | `multi-codex run [名称] [-- 命令 ...]` | 在账号的环境下运行命令（默认运行 `codex`）；省略名称时，使用当前目录绑定的账号 |
@@ -153,18 +154,30 @@ multi-codex migrate-default
 | `multi-codex restore 名称 [--skip-process-check] [--accept-relogin]` | 撤销 `migrate-default`：把账号移回 `~/.codex` |
 | `multi-codex completion bash\|zsh\|fish` | 输出 shell 补全脚本 |
 
-所有写命令都支持 `--dry-run`。`init`、`add`、`proxy`、`remove`、`apply`、`bind`、`unbind`、`env` 只打印有变化的项（没有变化时输出 `already up to date`），加 `-v` / `--verbose` 时连没变的项也打印。`list`、`usage`、`doctor` 不会修改任何东西；加 `--json` 时，stdout 上只输出一个 JSON 对象（带 `"version": 1` 字段），警告仍写到 stderr。脚本请使用 `--json`：表格格式不保证稳定。
+所有写命令都支持 `--dry-run`。`init`、`add`、`set`、`proxy`、`remove`、`apply`、`bind`、`unbind`、`env` 只打印有变化的项（没有变化时输出 `already up to date`），加 `-v` / `--verbose` 时连没变的项也打印。`list` 的 `-v` 含义不同，表示输出完整表格。`list`、`usage`、`doctor` 不会修改任何东西；加 `--json` 时，stdout 上只输出一个 JSON 对象（带 `"version": 1` 字段），警告仍写到 stderr。脚本请使用 `--json`：表格格式不保证稳定。
 
 ### 登录身份与额度
 
-`list` 增加了 LOGIN 和 PLAN 两列，内容读自各账号本地的 `auth.json`。不会输出任何令牌，也不会联网。LOGIN 列可能是：
+`list` 每个账号一行：
+
+```text
+default: work
+NAME  LOGIN          PROXY                  SHARED  USAGE           STATUS
+work  w@example.com  http://127.0.0.1:7901  yes     5h 23%, 7d 41%  ok
+home  -              inherit                no      -               not logged in
+run `multi-codex doctor` for details
+```
+
+LOGIN 读自各账号本地的 `auth.json`，不会输出任何令牌，也不会联网。LOGIN 列可能是：
 - 邮箱；
 - `api-key`；
 - `-`：未登录；
 - `keyring`：凭据存在系统钥匙串里，无法从文件读取；
 - `unreadable`：凭据文件读不了。
 
-PLAN 是当前令牌签发时的套餐，Codex 下次刷新令牌后才会更新。两个账号登录的是同一个 ChatGPT 用户和工作区时，`list` 会给出警告，因为它们共用一份额度。
+USAGE 是账号本地会话记录里最近一次的额度快照，与 `multi-codex usage` 读的是同一份数据：`reset` 表示快照之后窗口已经重置；末尾的 `*` 表示 `sessions` 与其它账号共享，额度可能属于别的账号。STATUS 列出需要处理的问题（`missing-dir`、`launcher missing`/`stale`/`conflict`、`not logged in`），`doctor` 会逐条说明。两个账号登录的是同一个 ChatGPT 用户和工作区时，`list` 会给出警告，因为它们共用一份额度。
+
+`list -v` 输出以前版本的完整表格：账号根目录、启动命令目录、共享目录，以及 DIR、LAUNCHER、PLAN 列。PLAN 是当前令牌签发时的套餐，Codex 下次刷新令牌后才会更新。
 
 `multi-codex usage` 从各账号的会话记录（`sessions/` 和 `archived_sessions/`）中读取最近一次的额度快照。这种方式不联网，但数据可能已经过时；快照之后已经重置的窗口显示为 `reset since snapshot`。
 
@@ -393,14 +406,15 @@ multi-codex remove main         # 注销账号
 ## 共享资源
 
 ```sh
-multi-codex init --shared-dir ~/.codex-shared --shared-items AGENTS.md,skills,rules,agents
-multi-codex add work --shared
+multi-codex set work --shared
 ```
 
-- 先把要共享的条目放进共享目录：共享目录里没有的条目会被跳过（输出 `skip`），不会建链接。
+- `--shared` 不带目录时，沿用已经设置的共享目录；还没有设置时用 `~/.codex-shared`。
+- 先把要共享的条目放进共享目录：共享目录里没有的条目会被跳过（输出 `skip`），不会建链接；一个条目都没有时，multi-codex 会提示。要改共享哪些条目，用 `multi-codex init --shared-items AGENTS.md,skills,rules,agents`。
+- `--shared 目录`（例如 `multi-codex set work --shared ~/my-shared`）改的是**所有**共享账号的共享目录，不只是这一个账号：它们的链接都会改指向新目录，新目录里没有的条目，原来的链接会被删除。账号名要写在 `--shared` 前面，写成 `add --shared work` 会把 `work` 当成目录。
 - multi-codex 只创建缺少的链接，并记住哪些链接是它自己建的。
 - 关闭共享时，只删除它建的那些链接，你自己建的链接不受影响。
-- 如果你以前手工把某个账号软链到了共享目录，可以用 `multi-codex add 名称 --shared --adopt` 让工具接管这些链接：链接本身不重建，但之后关闭共享时也会被删除。只接管已经指向对应共享条目的链接。
+- 如果你以前手工把某个账号软链到了共享目录，可以用 `multi-codex set 名称 --shared --adopt` 让工具接管这些链接：链接本身不重建，但之后关闭共享时也会被删除。只接管已经指向对应共享条目的链接。
 - 链接位置上如果已经是真实的文件或目录，视为冲突，绝不覆盖。
 
 ### 哪些可以共享

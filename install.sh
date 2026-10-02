@@ -280,7 +280,34 @@ fi
 
 case ":${PATH}:" in
   *":${BIN_DIR}:"*) ;;
-  *) log "note: ${BIN_DIR} is not on PATH; add it in your shell profile, e.g. export PATH=\"${BIN_DIR}:\$PATH\"" ;;
+  *)
+    # Same table as src/multi_codex/shellpath.py; keep the two in sync.
+    # A ready-to-run command is given only for an absolute directory without characters
+    # that would break the quoting (' " $ ` \); otherwise fall back to the generic note.
+    path_cmd=""
+    case "$BIN_DIR" in
+      *[\'\"\$\`\\]*) ;;
+      /*)
+        case "$(basename "${SHELL:-}")" in
+          zsh) path_cmd="echo 'export PATH=\"${BIN_DIR}:\$PATH\"' >> ~/.zshrc" ;;
+          bash)
+            # macOS terminals open login shells, which read ~/.bash_profile instead of ~/.bashrc.
+            if [ "$(uname)" = Darwin ]; then
+              path_cmd="echo 'export PATH=\"${BIN_DIR}:\$PATH\"' >> ~/.bash_profile"
+            else
+              path_cmd="echo 'export PATH=\"${BIN_DIR}:\$PATH\"' >> ~/.bashrc"
+            fi
+            ;;
+          fish) path_cmd="fish_add_path '${BIN_DIR}'" ;;
+        esac
+        ;;
+    esac
+    if [ -n "$path_cmd" ]; then
+      log "note: ${BIN_DIR} is not on PATH; run: ${path_cmd}, then open a new terminal"
+    else
+      log "note: ${BIN_DIR} is not on PATH; add it to PATH in your shell profile, e.g. export PATH=\"${BIN_DIR}:\$PATH\""
+    fi
+    ;;
 esac
 
 if [ -n "$CONFIG_FILE" ]; then

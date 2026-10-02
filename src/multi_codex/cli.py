@@ -5,6 +5,7 @@
 """
 
 import argparse
+import difflib
 import json
 import os
 import subprocess
@@ -13,10 +14,10 @@ import time
 from typing import List, Optional, Tuple
 
 from . import (__version__, accounts, apps, binding, completion, doctor, identity, launcher, migrate, platform,
-               switch, usage)
+               shellpath, switch, usage)
 from .actions import CREATE, DELETE, UNCHANGED, UPDATE, Action, error, hint, info, print_action, warn
-from .config import (DEFAULT_SHARED_ITEMS, Account, Config, ConfigError, is_socks, load_config, normalize_proxy,
-                     parse_config, validate_env_key, validate_env_value, validate_name)
+from .config import (DEFAULT_SHARED_DIR, DEFAULT_SHARED_ITEMS, Account, Config, ConfigError, is_socks, load_config,
+                     normalize_proxy, parse_config, validate_env_key, validate_env_value, validate_name)
 from .fsutil import KIND_DIR, KIND_MISSING, display_path, entry_kind, expand
 from .lock import LockBusyError, WriteLock
 
@@ -37,6 +38,7 @@ COMMAND_GROUPS = (
         ("doctor", "check the installation, configuration and accounts (read-only)"),
     )),
     ("Everyday", (
+        ("set", "change an existing account: proxy, sharing, adopted links"),
         ("run", "run a command with an account's environment (default: codex)"),
         ("usage", "show rate-limit usage of accounts"),
         ("use", "show or change the default account (what ~/.codex points to)"),
@@ -115,20 +117,10 @@ def build_parser() -> argparse.ArgumentParser:
     _add_dry_run(p_mig)
 
     p_add = sub.add_parser("add", description=COMMAND_SUMMARY["add"])
-    p_add.add_argument("name")
-    p_add.add_argument("--proxy", help="port, URL, off or inherit (new accounts default to inherit)")
-    shared_group = p_add.add_mutually_exclusive_group()
-    shared_group.add_argument("--shared", dest="shared", action="store_true", default=None,
-                              help="link shared items into this account")
-    shared_group.add_argument("--no-shared", dest="shared", action="store_false",
-                              help="do not link shared items (default for new accounts)")
-    p_add.add_argument("--config-from", metavar="OTHER",
-                       help="copy config.toml from account OTHER (once; existing different content is a conflict)")
-    p_add.add_argument("--adopt", action="store_true",
-                       help="take over existing links that already point to the shared items, "
-                            "so that turning sharing off later removes them too")
-    _add_dry_run(p_add)
-    _add_verbose(p_add)
+    _add_account_options(p_add)
+
+    p_set = sub.add_parser("set", description=COMMAND_SUMMARY["set"])
+    _add_account_options(p_set)
 
     p_proxy = sub.add_parser("proxy", description=COMMAND_SUMMARY["proxy"])
     p_proxy.add_argument("name")
@@ -147,6 +139,9 @@ def build_parser() -> argparse.ArgumentParser:
     _add_verbose(p_apply)
 
     p_list = sub.add_parser("list", description=COMMAND_SUMMARY["list"])
+    # 与写命令的 -v 含义不同：这里是“输出完整表格”（0.7 及以前的默认输出），不是“也打印 unchanged 项”。
+    p_list.add_argument("-v", "--verbose", action="store_true",
+                        help="show the full table (directories, launchers, plans) instead of the summary")
     _add_json(p_list)
 
     p_usage = sub.add_parser("usage", description=COMMAND_SUMMARY["usage"])
@@ -225,6 +220,29 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _add_account_options(parser: argparse.ArgumentParser) -> None:
+    """add 与 set 的参数完全相同，只在 dispatch 里区分“账号不存在时新建还是报错”。"""
+    parser.add_argument("name")
+    parser.add_argument("--proxy", help="port, URL, off or inherit (new accounts default to inherit)")
+    shared_group = parser.add_mutually_exclusive_group()
+    # 可选值：不带值时 shared_to 为 True（沿用已设置的 shared.dir，未设置时用默认目录），
+    # 带值时是新的共享目录。把账号名写在 --shared 后面（add --shared work）会被当成目录，
+    # argparse 随之报缺少 name，所以帮助与 README 一律写成 add NAME --shared。
+    shared_group.add_argument("--shared", dest="shared_to", nargs="?", const=True, default=None, metavar="DIR",
+                              help="link shared items into this account; DIR changes the shared directory of "
+                                   "every shared account (default: keep the current one, or {} if none is "
+                                   "set)".format(DEFAULT_SHARED_DIR))
+    shared_group.add_argument("--no-shared", dest="no_shared", action="store_true",
+                              help="do not link shared items (default for new accounts)")
+    parser.add_argument("--config-from", metavar="OTHER",
+                        help="copy config.toml from account OTHER (once; existing different content is a conflict)")
+    parser.add_argument("--adopt", action="store_true",
+                        help="take over existing links that already point to the shared items, "
+                             "so that turning sharing off later removes them too")
+    _add_dry_run(parser)
+    _add_verbose(parser)
+
+
 def _add_json(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--json", action="store_true",
                         help="print one JSON object on stdout; warnings still go to stderr")
@@ -261,6 +279,28 @@ def _split_run_command(argv: List[str]) -> Tuple[List[str], List[str]]:
     return argv, []
 
 
+def _unknown_command(parser: argparse.ArgumentParser, argv: List[str]) -> Optional[str]:
+    """子命令拼错时返回带建议的报错文字；命令名正确或交给 argparse 处理更合适时返回 None。
+
+    只看第一个不以 `-` 开头的参数：顶层只有 -h 和 --version 两个选项，都不带值，
+    所以它就是子命令的位置。没有这样的参数（如只给了 --version）时交给 argparse。
+    调用方已用 _split_run_command 切掉了 run / code / login 的 `--` 之后的部分，那里的词不参与判断。
+    """
+    word = next((arg for arg in argv if not arg.startswith("-")), None)
+    if word is None:
+        return None
+    names: List[str] = []
+    for action in parser._actions:  # noqa: SLF001 —— argparse 没有公开的子命令遍历接口
+        if isinstance(action, argparse._SubParsersAction):  # noqa: SLF001
+            names.extend(action.choices)
+    if word in names:
+        return None
+    close = difflib.get_close_matches(word, names, n=1, cutoff=0.6)
+    if close:
+        return "unknown command {!r}; did you mean {!r}?".format(word, close[0])
+    return "unknown command {!r}; run multi-codex -h for the list".format(word)
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     parser = build_parser()
     argv, run_command = _split_run_command(list(sys.argv[1:] if argv is None else argv))
@@ -268,6 +308,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         # 不带任何参数：新用户最常见的第一次运行，给上手指引而不是 argparse 的“缺少 COMMAND”报错。
         print_getting_started()
         return accounts.EXIT_OK
+    unknown = _unknown_command(parser, argv)
+    if unknown is not None:
+        error(unknown)
+        return accounts.EXIT_USAGE
     try:
         args = parser.parse_args(argv)
     except SystemExit as exc:
@@ -304,7 +348,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         if restore_notice:
             warn(restore_notice)
         if args.command == "list":
-            return cmd_list(args.json)
+            return cmd_list(args.json, args.verbose)
         # 以下两种只读模式不加锁，未完成的迁移或 restore 也不拦。
         if args.command == "env" and not (args.assignments or args.unset or args.clear):
             return cmd_env_list(args.name)
@@ -391,20 +435,35 @@ def dispatch(args: argparse.Namespace) -> int:
             if any(item in (".", "..") or "/" in item for item in items):
                 raise UsageError("--shared-items must be plain names without '/'")
             new.shared_items = items
-    elif args.command == "add":
+    elif args.command in ("add", "set"):
+        # add 对已登记的账号也是“修改选项”（保持兼容）；set 只改已登记的账号，不会新建。
         name = _checked_name(args.name)
         account = new.find(name)
         if account is None:
+            # 未登记先于“没有选项”判断：`set 拼错的名字` 应该得到名字上的建议，而不是“请给选项”。
+            if args.command == "set":
+                error(_not_registered_for_set(new, name))
+                return accounts.EXIT_ERROR
             account = Account(name)
             new.accounts[name] = account
+        if args.command == "set" and not _any_account_option(args):
+            raise UsageError("nothing to set; give at least one option, e.g. `multi-codex set {} --proxy 7901`".format(
+                account.name))
         if args.proxy is not None:
             account.proxy = _checked_proxy(args.proxy)
-        if args.shared is not None:
-            account.shared = args.shared
+        if args.shared_to is not None:
+            if args.shared_to is not True:
+                # 改的是全局 shared.dir：所有开启共享的账号都会跟着改指向，见收敛后的提示。
+                new.shared_dir = _checked_shared_dir(args.shared_to)
+            elif not new.shared_dir:
+                new.shared_dir = DEFAULT_SHARED_DIR
+            account.shared = True
+        elif args.no_shared:
+            account.shared = False
         if args.adopt:
             # 接管只对开启了共享的账号有意义；关闭状态下工具本来就不管这些软链。
             if not account.shared:
-                raise UsageError("--adopt requires sharing to be on for {!r}; add --shared".format(account.name))
+                raise UsageError("--adopt requires sharing to be on for {!r}; use --shared".format(account.name))
             adopt_accounts = frozenset([account.name.casefold()])
         if args.config_from:
             extra_actions = _config_copy_actions(new, account, args.config_from)
@@ -476,9 +535,68 @@ def dispatch(args: argparse.Namespace) -> int:
             print_action(binding_change, dry_run=args.dry_run)
         elif code != accounts.EXIT_OK:
             info("binding not changed because of the errors above")
+    if args.command in ("add", "set") and code == accounts.EXIT_OK and not args.dry_run:
+        _hint_shared_dir(old, new, args)
+    # set 不新建账号，不需要“下一步登录”的提示。
     if args.command == "add" and code == accounts.EXIT_OK and not args.dry_run:
         _hint_after_setup(new, args.name, check_login=True)
     return code
+
+
+def _any_account_option(args: argparse.Namespace) -> bool:
+    return (args.proxy is not None or args.shared_to is not None or args.no_shared or args.adopt
+            or bool(args.config_from))
+
+
+def _not_registered_for_set(config: Config, name: str) -> str:
+    """set 遇到未登记账号的报错：not_registered 已带下一步建议时不再追加，避免出现两条建议。
+
+    按条件重新判断，不解析 not_registered 返回的文字：那两种情况（有相近名字、还没有任何账号）
+    与 config.not_registered 的判断规则相同（casefold + difflib，cutoff 0.6）。
+    """
+    message = config.not_registered(name)
+    folded = [account.casefold() for account in config.accounts]
+    has_suggestion = not folded or bool(difflib.get_close_matches(name.casefold(), folded, n=1, cutoff=0.6))
+    if has_suggestion:
+        return message
+    return "{}; use `multi-codex add NAME` to create it".format(message)
+
+
+def _checked_shared_dir(value: str) -> str:
+    """`--shared DIR` 的目录：必须看得出是路径，相对路径转成绝对路径后再写入配置。
+
+    只认含 `/`、或以 `~`、`.` 开头的值：`add work --shared other` 这种把账号名误写在后面的情况
+    会被当成目录，必须拦下，否则会把全局共享目录改成当前目录下一个叫 other 的目录。
+    不以 `~` 开头的值转成绝对路径：expand() 按每次运行时的当前目录解析相对路径，
+    原样写入后换一个目录执行 apply，所有共享链接都会被判为指向别处。
+    """
+    if "/" not in value and not value.startswith(("~", ".")):
+        raise UsageError("--shared DIR must be a path (contains '/' or starts with '~' or '.'), got {!r}".format(
+            value))
+    if value.startswith("~"):
+        return value
+    return os.path.abspath(value)
+
+
+def _hint_shared_dir(old: Config, new: Config, args: argparse.Namespace) -> None:
+    """add / set 收敛成功后的两条共享目录提示（只输出，不改文件、不影响退出码）。
+
+    1. 共享目录变了：改的是全局设置，所有共享账号都跟着改指向，新目录里没有的条目原来的链接会被删掉；
+       只是写法不同、展开后是同一个目录时不算变化。
+    2. 本次命令开启了共享，但共享目录里一个条目都没有：链接一个都不会出现，告诉用户该往哪里放什么。
+    """
+    if new.shared_dir and (not old.shared_dir or expand(new.shared_dir) != expand(old.shared_dir)):
+        info("shared directory is now {} (was {}); every shared account follows it, "
+             "and links to items missing there are removed".format(
+                 display_path(expand(new.shared_dir)),
+                 display_path(expand(old.shared_dir)) if old.shared_dir else "not set"))
+    if args.shared_to is None or not new.shared_dir or not new.shared_items:
+        return
+    shared_root = expand(new.shared_dir)
+    # 判定与 shared.plan_shared 相同：条目不存在（KIND_MISSING）的才算缺。
+    if all(entry_kind(os.path.join(shared_root, item)) == KIND_MISSING for item in new.shared_items):
+        info("note: {} has none of {} yet; put what every account should share there, "
+             "then run `multi-codex apply`".format(display_path(shared_root), ", ".join(new.shared_items)))
 
 
 # identity.read_identity 的 login 取值 → 读不出邮箱的原因（给 _derive_migrate_name 的报错用）。
@@ -536,8 +654,8 @@ def _hint_after_setup(config: Config, name: str, check_login: bool) -> None:
             hint("next: log in with `multi-codex login {}`".format(account.name))
     if not on_path:
         sys.stdout.flush()  # 同 hint()：让警告排在动作行之后
-        warn("{} is not on PATH, so `codex-{}` will not be found; add it in your shell profile, "
-             "e.g. export PATH=\"{}:$PATH\"".format(display_path(bin_dir), account.name, bin_dir))
+        warn("{} is not on PATH, so `codex-{}` will not be found; {}".format(
+            display_path(bin_dir), account.name, shellpath.current_path_hint(bin_dir)))
 
 
 def print_getting_started() -> None:
@@ -677,7 +795,8 @@ def _print_json(data: dict) -> None:
     print(json.dumps(data, indent=2, ensure_ascii=False))
 
 
-def cmd_list(as_json: bool = False) -> int:
+def cmd_list(as_json: bool = False, verbose: bool = False) -> int:
+    """账号一览。默认简表（登录、代理、共享、额度、状态）；verbose 时输出 0.7 及以前的完整表格，逐字不变。"""
     config, exists = load_config()
     migrate.warn_isolation_env()
     if not exists:
@@ -723,6 +842,8 @@ def cmd_list(as_json: bool = False) -> int:
         _warn_duplicates(duplicates, entries)
         return accounts.EXIT_OK
 
+    if not verbose:
+        return _print_list_summary(config, entries, duplicates)
     print("root: {}".format(display_path(expand(config.root))))
     print("bin_dir: {}".format(display_path(expand(config.bin_dir))))
     # 表头路径缩写成 ~/… 只为好读；行数不变，按行位置解析表格的脚本不受影响（脚本应使用 --json）。
@@ -743,6 +864,72 @@ def cmd_list(as_json: bool = False) -> int:
         print("  ".join(cell.ljust(width) for cell, width in zip(row, widths)).rstrip())
     _warn_duplicates(duplicates, entries)
     return accounts.EXIT_OK
+
+
+def _print_list_summary(config: Config, entries, duplicates: List[List[str]]) -> int:
+    """list 的默认简表：一眼看出谁登录在哪、额度用了多少、哪个账号有问题。
+
+    STATUS 只列需要处理的问题，细节交给 doctor；有任何问题时表格后面提示去跑 doctor。
+    额度只读本机会话日志里的最近快照（usage.local_snapshot），不联网、不启动进程。
+    """
+    print("default: {}".format(switch.describe_default(config)[1]))
+    if not config.accounts:
+        print("no accounts registered")
+        return accounts.EXIT_OK
+    now = time.time()
+    rows = [("NAME", "LOGIN", "PROXY", "SHARED", "USAGE", "STATUS")]
+    has_problem = False
+    has_shared_sessions = False
+    for name, account, directory, is_dir, found in entries:
+        problems = []
+        cell = "-"
+        if not is_dir:
+            # 目录都不在了，登录状态没有意义，只报这一条。
+            problems.append("missing-dir")
+        else:
+            result = usage.local_snapshot(name, directory)
+            cell = _usage_cell(result, now)
+            if result.sessions_shared and cell != "-":
+                cell += "*"
+                has_shared_sessions = True
+        launcher_state = accounts.launcher_status(config, name)
+        if launcher_state != "ok":
+            problems.append("launcher {}".format(launcher_state))
+        if found is not None and found.login == identity.LOGIN_LOGGED_OUT:
+            problems.append("not logged in")
+        has_problem = has_problem or bool(problems)
+        rows.append((name, identity.display_login(found) if found else "-", account.proxy,
+                     "yes" if account.shared else "no", cell, ", ".join(problems) or "ok"))
+    widths = [max(len(row[index]) for row in rows) for index in range(len(rows[0]))]
+    for row in rows:
+        print("  ".join(cell.ljust(width) for cell, width in zip(row, widths)).rstrip())
+    if has_shared_sessions:
+        print("* sessions is shared with other accounts; usage may belong to another account")
+    if has_problem:
+        print("run `multi-codex doctor` for details")
+    _warn_duplicates(duplicates, entries)
+    return accounts.EXIT_OK
+
+
+def _usage_cell(result: usage.UsageResult, now: float) -> str:
+    """简表的 USAGE 单元格，如 `5h 23%, 7d 41%`；没有快照时为 `-`。
+
+    窗口按快照里实际有的显示（有的账号只有 30 天窗口），不固定成 5h、7d 两列。
+    选额度时优先 codex（Codex 本身的额度），没有再取第一个带窗口的。
+    已过重置时刻的窗口显示 `reset`：旧百分比已不代表当前用量，判定与 usage.format_result 相同。
+    """
+    with_windows = [limit for limit in result.limits if limit.windows]
+    if not with_windows:
+        return "-"
+    chosen = next((limit for limit in with_windows if limit.limit_id == usage.DEFAULT_LIMIT_ID), with_windows[0])
+    parts = []
+    for window in chosen.windows:
+        label = usage._window_label(window.window_minutes)  # noqa: SLF001 —— 与 usage 命令用同一套标签
+        if window.resets_at is not None and window.resets_at <= now:
+            parts.append("{} reset".format(label))
+        else:
+            parts.append("{} {:.0f}%".format(label, window.used_percent))
+    return ", ".join(parts)
 
 
 def _warn_duplicates(duplicates: List[List[str]], entries) -> None:

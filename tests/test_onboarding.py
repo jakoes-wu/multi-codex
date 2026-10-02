@@ -225,7 +225,7 @@ class DisplayPathTest(OnboardingBase):
         out = self.ok("add", "work").out
         self.assertIn("~/.local/bin/codex-work", out)
         self.assertNotIn(self.home, out)
-        self.assertIn("root: ~/.cx", self.ok("list").out)
+        self.assertIn("root: ~/.cx", self.ok("list", "--verbose").out)
         self.assertEqual(self.ok("path", "work").out.strip(), os.path.join(self.root, "work"))
         self.assertEqual(json.loads(self.ok("list", "--json").out)["root"], self.root)
 

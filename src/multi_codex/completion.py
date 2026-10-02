@@ -13,7 +13,7 @@ import argparse
 from typing import Dict, List, Tuple
 
 # 第一个位置参数是账号名的子命令；usage 的每个位置参数都是账号名。
-ACCOUNT_COMMANDS = ("add", "login", "proxy", "remove", "migrate-default", "run", "path", "env", "usage", "use",
+ACCOUNT_COMMANDS = ("add", "set", "login", "proxy", "remove", "migrate-default", "run", "path", "env", "usage", "use",
                     "restore", "bind", "code", "app")
 MULTI_ACCOUNT_COMMANDS = ("usage",)
 SHELLS = ("bash", "zsh", "fish")

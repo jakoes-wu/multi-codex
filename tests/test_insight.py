@@ -82,7 +82,7 @@ class IdentityTest(InsightBase):
     def test_list_shows_email_and_plan_without_tokens(self):
         self.add("work")
         self.write_auth("work", chatgpt_claims("w@example.com", "plus"))
-        result = self.ok("list")
+        result = self.ok("list", "--verbose")
         header, row = [line for line in result.out.splitlines() if line.startswith(("NAME", "work"))]
         self.assertEqual(header.split(), ["NAME", "DIR", "PROXY", "SHARED", "LAUNCHER", "LOGIN", "PLAN"])
         self.assertEqual(row.split()[5:], ["w@example.com", "plus"])
@@ -108,7 +108,7 @@ class IdentityTest(InsightBase):
         data, _ = self.list_json()
         types = {account["name"]: account["login"]["type"] for account in data["accounts"]}
         self.assertEqual(types, {"key": "apikey", "none": "logged-out", "ring": "keyring", "bad": "unreadable"})
-        result = self.ok("list")
+        result = self.ok("list", "--verbose")
         rows = {line.split()[0]: line.split()[5:] for line in result.out.splitlines()[4:]}
         self.assertEqual(rows["key"], ["api-key", "-"])
         self.assertEqual(rows["none"], ["-", "-"])
@@ -132,7 +132,7 @@ class IdentityTest(InsightBase):
 
     def test_first_five_columns_unchanged(self):
         self.add("work")
-        result = self.ok("list")
+        result = self.ok("list", "--verbose")
         lines = result.out.splitlines()
         # 表头之前的说明行在 v0.4 多了一行 default:，按内容定位表头。
         header = next(index for index, line in enumerate(lines) if line.startswith("NAME"))
