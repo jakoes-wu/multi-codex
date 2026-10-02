@@ -33,15 +33,18 @@ def _private_dir(path: str) -> str:
     return path
 
 
-def gui_data_dir(config: Config, name: str, kind: str) -> str:
-    """返回并创建 <root>/.apps/<名>/<kind>（kind 为 vscode 或 desktop），各级目录都只允许本人访问。"""
+def gui_data_dir(config: Config, dir_name: str, kind: str) -> str:
+    """返回并创建 <root>/.apps/<账号目录名>/<kind>（kind 为 vscode 或 desktop），各级目录都只允许本人访问。
+
+    按目录名而不是账号名存放：rename 后 VS Code 与桌面端的登录状态、窗口与扩展数据都还在原处。
+    """
     apps_root = _private_dir(os.path.join(expand(config.root), ".apps"))
-    account_root = _private_dir(os.path.join(apps_root, name))
+    account_root = _private_dir(os.path.join(apps_root, dir_name))
     return _private_dir(os.path.join(account_root, kind))
 
 
-def desktop_log(config: Config, name: str) -> str:
-    path = os.path.join(expand(config.root), ".apps", name, "desktop.log")
+def desktop_log(config: Config, dir_name: str) -> str:
+    path = os.path.join(expand(config.root), ".apps", dir_name, "desktop.log")
     fd = os.open(path, os.O_CREAT | os.O_APPEND | os.O_WRONLY, 0o600)
     os.close(fd)
     os.chmod(path, 0o600)

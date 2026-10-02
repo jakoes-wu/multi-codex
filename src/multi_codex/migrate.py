@@ -197,8 +197,8 @@ def _warn_environment(source_path: str) -> None:
 def warn_isolation_env() -> None:
     for variable in platform.ISOLATION_BREAKING_ENV:
         if os.environ.get(variable):
-            warn("{} is set in the environment; every account launched from this shell "
-                 "will share it".format(variable))
+            warn("{} is set in this shell; codex-<name> launchers clear it, but plain codex "
+                 "still uses it".format(variable))
 
 
 def _precheck_without_journal(config: Config, config_exists: bool, name: str, source: str,

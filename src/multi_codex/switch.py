@@ -187,11 +187,15 @@ def restore_account(config: Config, config_exists: bool, name: str, skip_process
     # 账号已注销（状态 C 中途）时配置里查不到原名，用标记中记录的名字，用户输入的大小写不同也能续跑。
     if account is not None:
         canonical = account.name
+        target = accounts.account_dir(config, canonical)
     elif journal is not None and journal["name"].casefold() == name.casefold():
         canonical = journal["name"]
+        # 账号已注销时按名字拼不出改过名账号的目录（目录名与账号名不同），用标记里记下的目录，
+        # 否则重跑会因三项比对不一致判冲突，用户只能手工删标记（feature-isolation-sharing-rename §5.1.6）。
+        target = journal["target"]
     else:
         canonical = name
-    target = accounts.account_dir(config, canonical)
+        target = accounts.account_dir(config, canonical)
     state, code, message = _restore_state(config, canonical, link, target, journal)
 
     if state is None and message == "D":

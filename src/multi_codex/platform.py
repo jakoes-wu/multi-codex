@@ -12,7 +12,8 @@ from typing import List, NamedTuple, Optional, Tuple
 
 from .fsutil import expand, is_under
 
-# 这些变量在全局设置时会破坏账号隔离，见方案 §3。
+# 这些变量在全局设置时会破坏账号隔离，见方案 §3。启动命令会清除它们（launcher.render），
+# 所以只有直接运行的 codex 仍会用到；账号需要时用 `multi-codex env` 单独设置。
 ISOLATION_BREAKING_ENV = ("CODEX_SQLITE_HOME", "CODEX_API_KEY", "CODEX_ACCESS_TOKEN")
 
 

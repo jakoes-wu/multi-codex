@@ -118,6 +118,7 @@ multi-codex migrate-default
 | 在新机器上一次建好所有账号 | `curl -fsSL https://raw.githubusercontent.com/jakoes-wu/multi-codex/main/install.sh \| sh -s -- --config accounts.json` | 用 `apply` 声明式部署 |
 | 开启 Tab 补全 | `eval "$(multi-codex completion zsh)"` | shell 补全 |
 | 先看看命令会改什么 | 加 `--dry-run` | 命令 |
+| 账号改名 | `multi-codex rename work client-a`（目录与登录不变） | 账号改名 |
 | 删除账号 | `multi-codex remove work`（账号目录会保留） | 命令 |
 
 更多问题见“常见问题”一节。
@@ -135,8 +136,9 @@ multi-codex migrate-default
 | ---- | ---- |
 | `multi-codex init [--root DIR] [--bin-dir DIR] [--shared-dir DIR] [--shared-items A,B]` | 创建或修改全局设置 |
 | `multi-codex migrate-default [名称] [--source DIR] [--copy] [--keep-backup] [--proxy P] [--skip-process-check] [--accept-relogin]` | 把默认目录迁移成账号；省略名称时取其 `auth.json` 里的邮箱 |
-| `multi-codex add 名称 [--proxy P] [--shared [目录] \| --no-shared] [--adopt] [--config-from 其它账号]` | 新增账号、登记已有目录，或修改账号选项；`--config-from` 从另一个账号复制一次 `config.toml` |
-| `multi-codex set 名称 [--proxy P] [--shared [目录] \| --no-shared] [--adopt] [--config-from 其它账号]` | 修改已有账号；选项与 `add` 相同，但不会新建账号 |
+| `multi-codex add 名称 [--proxy P] [--shared [目录] \| --no-shared] [--shared-exclude 条目] [--shared-include 条目] [--adopt] [--config-from 其它账号]` | 新增账号、登记已有目录，或修改账号选项；`--config-from` 从另一个账号复制一次 `config.toml` |
+| `multi-codex set 名称 [与 add 相同的选项]` | 修改已有账号；选项与 `add` 相同，但不会新建账号 |
+| `multi-codex rename 旧名 新名` | 给账号和启动命令改名；目录、登录与链接都不变 |
 | `multi-codex login 名称 [-- 参数]` | 用账号的环境运行 `codex login`，`--` 之后的参数交给 `codex login`；不需要 `~/.local/bin` 在 `PATH` 中 |
 | `multi-codex proxy 名称 端口\|URL\|off\|inherit` | 设置账号的代理 |
 | `multi-codex remove 名称` | 注销账号，删除它的启动命令。**账号目录会保留** |
@@ -154,7 +156,7 @@ multi-codex migrate-default
 | `multi-codex restore 名称 [--skip-process-check] [--accept-relogin]` | 撤销 `migrate-default`：把账号移回 `~/.codex` |
 | `multi-codex completion bash\|zsh\|fish` | 输出 shell 补全脚本 |
 
-所有写命令都支持 `--dry-run`。`init`、`add`、`set`、`proxy`、`remove`、`apply`、`bind`、`unbind`、`env` 只打印有变化的项（没有变化时输出 `already up to date`），加 `-v` / `--verbose` 时连没变的项也打印。`list` 的 `-v` 含义不同，表示输出完整表格。`list`、`usage`、`doctor` 不会修改任何东西；加 `--json` 时，stdout 上只输出一个 JSON 对象（带 `"version": 1` 字段），警告仍写到 stderr。脚本请使用 `--json`：表格格式不保证稳定。
+所有写命令都支持 `--dry-run`。`init`、`add`、`set`、`rename`、`proxy`、`remove`、`apply`、`bind`、`unbind`、`env` 只打印有变化的项（没有变化时输出 `already up to date`），加 `-v` / `--verbose` 时连没变的项也打印。`list` 的 `-v` 含义不同，表示输出完整表格。`list`、`usage`、`doctor` 不会修改任何东西；加 `--json` 时，stdout 上只输出一个 JSON 对象（带 `"version": 1` 字段），警告仍写到 stderr。脚本请使用 `--json`：表格格式不保证稳定。
 
 ### 登录身份与额度
 
@@ -239,6 +241,17 @@ multi-codex unbind                             # 解除当前目录的绑定
 
 复制的是整个文件，包括 `cli_auth_credentials_store` 设置，以及指向原账号的绝对路径。
 
+### 账号改名
+
+```sh
+multi-codex rename work client-a
+```
+
+- 账号和启动命令换成新名字（生成 `codex-client-a`，删除 `codex-work`），目录绑定和默认账号跟着改。
+- 目录原地不动，登录、会话和共享链接都保留；`config.json` 里记为 `"dir": "work"`（`list --json` 里的 `dir` 则是完整路径）。
+- 仍被别的账号用作目录名的名字（例如改名后的 `work`）不能再给新账号使用。只改大小写的改名不支持。
+- 降级到 0.9 以前的版本之前，先把账号改回原名：旧版本不认识 `dir`，会改用 `<根目录>/client-a`。
+
 ### 每个账号的环境变量
 
 ```sh
@@ -248,6 +261,7 @@ multi-codex env work --unset TERM_PROGRAM
 multi-codex env work --clear
 ```
 
+- **隔离变量**：启动命令（以及环境相同的 `run`、`login`、`code`、`usage --live`）会清除从 shell 继承来的 `CODEX_API_KEY`、`CODEX_ACCESS_TOKEN`、`CODEX_SQLITE_HOME`，避免一个导出的 API key 或数据库位置被所有账号共用。需要 API key 的账号在这里单独设置，例如 `multi-codex env work CODEX_API_KEY=sk-…`；账号自己的变量在清除之后设置，照常生效。
 - **存放位置**：变量保存在 `config.json` 的 `accounts.<名称>.env` 中，并写进启动命令。
 - **按字面使用**：值不会展开 `$VAR`。
 - **保留变量**：`CODEX_HOME` 和代理变量不能在这里设置，代理请用 `multi-codex proxy`。
@@ -368,7 +382,7 @@ multi-codex apply -f accounts.json
 - socket、FIFO 这类运行时文件（例如 `ipc.sock`）不会被复制。
 - macOS 上 copy 模式不保留扩展属性（xattr）。
 
-**环境变量提醒**：如果设置了 `CODEX_HOME`、`CODEX_SQLITE_HOME`、`CODEX_API_KEY` 或 `CODEX_ACCESS_TOKEN`，工具会给出警告，因为这些变量会覆盖或绕过账号之间的隔离。
+**环境变量提醒**：如果设置了 `CODEX_HOME`、`CODEX_SQLITE_HOME`、`CODEX_API_KEY` 或 `CODEX_ACCESS_TOKEN`，工具会给出警告：启动命令会重新设置或清除它们，但直接运行的 `codex` 仍会用到。
 
 ### 撤销迁移
 
@@ -416,6 +430,8 @@ multi-codex set work --shared
 - 关闭共享时，只删除它建的那些链接，你自己建的链接不受影响。
 - 如果你以前手工把某个账号软链到了共享目录，可以用 `multi-codex set 名称 --shared --adopt` 让工具接管这些链接：链接本身不重建，但之后关闭共享时也会被删除。只接管已经指向对应共享条目的链接。
 - 链接位置上如果已经是真实的文件或目录，视为冲突，绝不覆盖。
+- **按账号退出某些共享项**：`multi-codex set work --shared-exclude skills` 会删除 multi-codex 在 `work` 里建的 `skills` 链接（与对这一项关闭共享相同），之后也不再建；`--shared-include skills` 撤销。两个选项都可重复，名称与 `shared.items` 精确匹配，`list` 显示为 `yes (not: skills)`。要排除 `config.toml` 再从别的账号复制配置，请把 `--shared-exclude config.toml` 和 `--config-from` 分成两条命令。
+- **不能共享的条目**：保存账号自身状态的条目永远不能共享，`shared.items` 里不能出现下表中标为“不能”或“不要共享”的条目。配置里写了这类条目时会加载失败并指出是哪一项，请从 `config.json` 里删掉。
 
 ### 哪些可以共享
 
@@ -431,7 +447,7 @@ multi-codex set work --shared
 | `history.jsonl` | 输入历史 | 可以 | 读写都加文件锁；各账号的输入历史会合在一起 |
 | `auth.json`、`secrets/`、`.credentials.json`、`.env` | 凭据 | **不能** | 它们就是账号本身 |
 | `installation_id` | 安装标识 | 不要共享 | 会随请求发出；共享后多个账号看起来像同一个安装 |
-| `*.sqlite`（`state_5.sqlite` 等） | 线程、日志、记忆数据库 | **不能** | `state_5.sqlite` 记录了账号 ID |
+| `*.sqlite`、`*.sqlite-wal`、`*.sqlite-shm`（`state_5.sqlite` 等）、`sqlite/` | 线程、日志、记忆数据库 | **不能** | `state_5.sqlite` 记录了账号 ID |
 | `sessions/`、`archived_sessions/`、`session_index.jsonl` | 会话记录 | 不要共享 | 索引只有进程内的锁；会话中记有创建者账号 |
 | `models_cache.json`、`cache/` | 缓存 | 不需要 | 按账号区分，账号不符就当作未命中 |
 | `app-server-control/`、`app-server-daemon/`、`packages/`、`tmp/`、`.tmp/`、`log/`、`shell_snapshots/` | 运行时状态 | 不要共享 | 按进程或按会话使用 |
@@ -517,7 +533,10 @@ open -n --env CODEX_HOME="$HOME/.cx/work" --env CODEX_ELECTRON_USER_DATA_PATH="$
 ```sh
 curl -fsSL https://raw.githubusercontent.com/jakoes-wu/multi-codex/main/install.sh | sh
 multi-codex --version
+multi-codex apply      # 从 0.8 或更早版本升级后执行一次：重写启动命令
 ```
+
+0.9 改变了启动命令的内容。在 `multi-codex apply`（或任何其它写命令）重写之前，`list` 显示 `launcher stale`，`usage --live` 会拒绝运行；旧启动命令照常可用。
 
 ## 退出码
 

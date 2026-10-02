@@ -6,6 +6,34 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+**After upgrading, run `multi-codex apply` once.** The launcher template
+changed, so existing launchers show as `launcher stale` and `usage --live`
+refuses to run until they are rewritten; they keep working meanwhile.
+
+### Added
+
+- `rename OLD NEW`: rename an account and its launcher. The directory stays,
+  so the login, sessions and shared links are kept; bindings and the default
+  account follow. `config.json` records the directory as `"dir"` when it
+  differs from the name. Rename accounts back before downgrading below 0.9.
+- `--shared-exclude ITEM` / `--shared-include ITEM` for `add` and `set`: one
+  account can opt out of (and back into) individual shared items. Excluding an
+  item removes only the link multi-codex created. `list` shows exclusions as
+  `yes (not: ...)`, and `list --json` has a `shared_exclude` field.
+
+### Changed
+
+- Launchers (and `run`, `login`, `code`, `usage --live`) clear
+  `CODEX_API_KEY`, `CODEX_ACCESS_TOKEN` and `CODEX_SQLITE_HOME` inherited from
+  the shell. An account that needs an API key sets it with
+  `multi-codex env NAME CODEX_API_KEY=...`.
+- `shared.items` must not contain items that hold one account's own state
+  (credentials, `installation_id`, SQLite databases, sessions, runtime
+  directories); such a configuration fails to load and names the item, and
+  `init --shared-items` rejects it (exit code 2).
+- The warnings about those variables in `list`, `migrate-default` and
+  `doctor` now say that launchers clear them and only plain `codex` uses them.
+
 ## [0.8.0] - 2026-10-02
 
 ### Added
