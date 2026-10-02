@@ -10,7 +10,7 @@ import subprocess
 import sys
 from typing import List, NamedTuple, Optional, Tuple
 
-from .fsutil import is_under
+from .fsutil import expand, is_under
 
 # 这些变量在全局设置时会破坏账号隔离，见方案 §3。
 ISOLATION_BREAKING_ENV = ("CODEX_SQLITE_HOME", "CODEX_API_KEY", "CODEX_ACCESS_TOKEN")
@@ -30,6 +30,15 @@ def default_root() -> str:
 
 def default_bin_dir() -> str:
     return "~/.local/bin"
+
+
+def dir_on_path(directory: str) -> bool:
+    """directory 是否在当前 PATH 中。两边都解析软链后比较，`~` 写法与软链写法都算命中。
+
+    doctor 的 path 检查与 add / migrate-default 之后的提示共用它，两处结论必须一致。
+    """
+    entries = [os.path.realpath(expand(entry)) for entry in os.environ.get("PATH", "").split(os.pathsep) if entry]
+    return os.path.realpath(directory) in entries
 
 
 def state_dir() -> str:

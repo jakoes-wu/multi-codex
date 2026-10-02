@@ -7,6 +7,8 @@
 import sys
 from typing import Callable, List, Optional
 
+from .fsutil import display_path
+
 CREATE = "create"
 UPDATE = "update"
 DELETE = "delete"
@@ -39,7 +41,8 @@ def has_conflict(actions: List[Action]) -> bool:
 
 def print_action(action: Action, dry_run: bool = False) -> None:
     status = action.status + (" (dry-run)" if dry_run and action.changes else "")
-    line = "{} {} {} {}".format(LOG_PREFIX, status, action.kind, action.path)
+    # 路径缩写成 ~/…，只为好读；脚本应读 --json，这里的文本格式不保证稳定。
+    line = "{} {} {} {}".format(LOG_PREFIX, status, action.kind, display_path(action.path))
     if action.reason:
         line += " ({})".format(action.reason)
     stream = sys.stderr if action.status == CONFLICT else sys.stdout
@@ -48,6 +51,15 @@ def print_action(action: Action, dry_run: bool = False) -> None:
 
 def info(message: str) -> None:
     print("{} {}".format(LOG_PREFIX, message))
+
+
+def hint(message: str) -> None:
+    """给新用户的下一步提示。写 stderr：stdout 可能被脚本逐行读取（例如 `use` 不带参数时输出账号名）。
+
+    先 flush stdout：输出接到管道时 stdout 有缓冲，不 flush 的话提示会排在它所针对的动作行前面。
+    """
+    sys.stdout.flush()
+    print("{} hint: {}".format(LOG_PREFIX, message), file=sys.stderr)
 
 
 def warn(message: str) -> None:

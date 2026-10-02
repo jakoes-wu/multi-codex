@@ -92,7 +92,7 @@ def describe_default(config: Config) -> Tuple[Optional[str], str]:
 def use_account(config: Config, name: str, skip_process_check: bool, dry_run: bool) -> int:
     account = config.find(name)
     if account is None:
-        error("account {!r} is not registered".format(name), phase="use")
+        error(config.not_registered(name), phase="use")
         return accounts.EXIT_ERROR
     target = accounts.account_dir(config, account.name)
     # 不跟随软链：账号目录本身是软链时，~/.codex 会变成“软链指向软链”，与 restore 的前提不一致。
@@ -160,7 +160,7 @@ def _restore_state(config: Config, name: str, link: str, target: str,
             return None, accounts.EXIT_CONFLICT, ("~/.codex does not point to {}; run `multi-codex use {}` "
                                                   "first".format(target, name))
         if not registered:
-            return None, accounts.EXIT_ERROR, "account {!r} is not registered".format(name)
+            return None, accounts.EXIT_ERROR, config.not_registered(name)
         if target_kind != KIND_DIR:
             return None, accounts.EXIT_CONFLICT, "{} is not a real directory".format(target)
         return None, accounts.EXIT_CONFLICT, "~/.codex is not a link to {}".format(target)
@@ -200,7 +200,7 @@ def restore_account(config: Config, config_exists: bool, name: str, skip_process
         path = launcher.launcher_path(expand(config.bin_dir), canonical)
         owner = launcher.managed_account(path)
         if owner is None or owner.casefold() != canonical.casefold():
-            error("account {!r} is not registered".format(name), phase="restore")
+            error(config.not_registered(name), phase="restore")
             return accounts.EXIT_ERROR
         if dry_run:
             info("(dry-run) would delete the leftover launcher {}".format(path))

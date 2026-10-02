@@ -14,10 +14,10 @@ from typing import List, Optional, Tuple
 
 from . import (__version__, accounts, apps, binding, completion, doctor, identity, launcher, migrate, platform,
                switch, usage)
-from .actions import CREATE, DELETE, UNCHANGED, UPDATE, Action, error, info, print_action, warn
+from .actions import CREATE, DELETE, UNCHANGED, UPDATE, Action, error, hint, info, print_action, warn
 from .config import (DEFAULT_SHARED_ITEMS, Account, Config, ConfigError, is_socks, load_config, normalize_proxy,
                      parse_config, validate_env_key, validate_env_value, validate_name)
-from .fsutil import expand
+from .fsutil import KIND_DIR, KIND_MISSING, display_path, entry_kind, expand
 from .lock import LockBusyError, WriteLock
 
 
@@ -25,16 +25,70 @@ class UsageError(Exception):
     """命令行参数不合法，对应退出码 2。"""
 
 
+# 顶层帮助的子命令分组：新用户先看到上手要用的几条，进阶命令放最后。
+# 这是子命令一句话说明的唯一来源：顶层分组列表与 `multi-codex <命令> -h` 的说明都从这里取；
+# 新增子命令必须加进某一组，测试会核对这里与 parser 注册的子命令集合完全相等。
+COMMAND_GROUPS = (
+    ("Get started", (
+        ("add", "add an account, adopt an existing directory, or change its options"),
+        ("migrate-default", "turn the default ~/.codex into a named account"),
+        ("list", "show accounts, their status and who is logged in"),
+        ("doctor", "check the installation, configuration and accounts (read-only)"),
+    )),
+    ("Everyday", (
+        ("run", "run a command with an account's environment (default: codex)"),
+        ("usage", "show rate-limit usage of accounts"),
+        ("use", "show or change the default account (what ~/.codex points to)"),
+        ("bind", "bind a directory to an account (no arguments: list bindings)"),
+        ("unbind", "remove the binding of a directory"),
+        ("code", "open VS Code for an account (experimental)"),
+        ("app", "open the Codex desktop app for an account (macOS, experimental)"),
+        ("proxy", "set the proxy of an account"),
+        ("path", "print an account's directory"),
+        ("completion", "print a shell completion script"),
+    )),
+    ("Advanced", (
+        ("env", "list or change an account's extra environment variables"),
+        ("remove", "unregister an account (its directory is kept)"),
+        ("restore", "undo migrate-default: move an account back to ~/.codex"),
+        ("apply", "converge all accounts to the configuration"),
+        ("init", "create or update the global settings"),
+    )),
+)
+COMMAND_SUMMARY = {name: summary for _, commands in COMMAND_GROUPS for name, summary in commands}
+
+HELP_EXAMPLES = """examples:
+  multi-codex add work          create account "work" and its launcher codex-work
+  codex-work login              log in once
+  multi-codex list              who is logged in where
+  multi-codex use work          make plain codex and the Dock apps use "work"
+"""
+
+
+def _grouped_commands_text() -> str:
+    width = max(len(name) for name in COMMAND_SUMMARY) + 2
+    lines = []
+    for title, commands in COMMAND_GROUPS:
+        lines.append("{}:".format(title))
+        lines.extend("  {}{}".format(name.ljust(width), summary) for name, summary in commands)
+        lines.append("")
+    return "\n".join(lines).rstrip("\n")
+
+
 def build_parser() -> argparse.ArgumentParser:
+    # 子命令不传 help=：argparse 只为带 help 的子命令生成自动列表，去掉后由 description 里的分组列表代替。
+    # RawDescriptionHelpFormatter 保留分组列表与示例的换行和对齐。
     parser = argparse.ArgumentParser(
         prog="multi-codex",
-        description="Manage multiple Codex CLI accounts: separate CODEX_HOME directories, "
-                    "per-account launchers and per-account proxies.")
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description="Manage multiple Codex CLI accounts: separate CODEX_HOME directories,\n"
+                    "per-account launchers and per-account proxies.\n\n" + _grouped_commands_text(),
+        epilog=HELP_EXAMPLES)
     parser.add_argument("--version", action="version", version="%(prog)s " + __version__)
     sub = parser.add_subparsers(dest="command", metavar="COMMAND")
     sub.required = True
 
-    p_init = sub.add_parser("init", help="create or update the global settings")
+    p_init = sub.add_parser("init", description=COMMAND_SUMMARY["init"])
     p_init.add_argument("--root", help="directory that holds account directories (default ~/.cx)")
     p_init.add_argument("--bin-dir", help="directory for codex-<name> launchers (default ~/.local/bin)")
     p_init.add_argument("--shared-dir", help="directory whose items can be linked into accounts")
@@ -42,7 +96,7 @@ def build_parser() -> argparse.ArgumentParser:
                         "(default {})".format(",".join(DEFAULT_SHARED_ITEMS)))
     _add_dry_run(p_init)
 
-    p_mig = sub.add_parser("migrate-default", help="turn the default ~/.codex into a named account")
+    p_mig = sub.add_parser("migrate-default", description=COMMAND_SUMMARY["migrate-default"])
     p_mig.add_argument("name")
     p_mig.add_argument("--source", help="directory to migrate (default ~/.codex)")
     p_mig.add_argument("--copy", action="store_true",
@@ -57,7 +111,7 @@ def build_parser() -> argparse.ArgumentParser:
                             "you will need to log in again afterwards")
     _add_dry_run(p_mig)
 
-    p_add = sub.add_parser("add", help="add an account, adopt an existing directory, or change its options")
+    p_add = sub.add_parser("add", description=COMMAND_SUMMARY["add"])
     p_add.add_argument("name")
     p_add.add_argument("--proxy", help="port, URL, off or inherit (new accounts default to inherit)")
     shared_group = p_add.add_mutually_exclusive_group()
@@ -72,23 +126,23 @@ def build_parser() -> argparse.ArgumentParser:
                             "so that turning sharing off later removes them too")
     _add_dry_run(p_add)
 
-    p_proxy = sub.add_parser("proxy", help="set the proxy of an account")
+    p_proxy = sub.add_parser("proxy", description=COMMAND_SUMMARY["proxy"])
     p_proxy.add_argument("name")
     p_proxy.add_argument("value", help="port (e.g. 7901), URL, off or inherit")
     _add_dry_run(p_proxy)
 
-    p_remove = sub.add_parser("remove", help="unregister an account (its directory is kept)")
+    p_remove = sub.add_parser("remove", description=COMMAND_SUMMARY["remove"])
     p_remove.add_argument("name")
     _add_dry_run(p_remove)
 
-    p_apply = sub.add_parser("apply", help="converge all accounts to the configuration")
+    p_apply = sub.add_parser("apply", description=COMMAND_SUMMARY["apply"])
     p_apply.add_argument("-f", "--file", help="use this file as the new configuration")
     _add_dry_run(p_apply)
 
-    p_list = sub.add_parser("list", help="show accounts, their status and who is logged in")
+    p_list = sub.add_parser("list", description=COMMAND_SUMMARY["list"])
     _add_json(p_list)
 
-    p_usage = sub.add_parser("usage", help="show rate-limit usage of accounts")
+    p_usage = sub.add_parser("usage", description=COMMAND_SUMMARY["usage"])
     p_usage.add_argument("names", nargs="*", metavar="NAME", help="accounts to show (default: all)")
     p_usage.add_argument("--live", action="store_true",
                          help="ask Codex (codex app-server, through the account's launcher) for live usage "
@@ -97,55 +151,55 @@ def build_parser() -> argparse.ArgumentParser:
                          help="total time limit per account for --live, in seconds (default 30)")
     _add_json(p_usage)
 
-    p_doctor = sub.add_parser("doctor", help="check the installation, configuration and accounts (read-only)")
+    p_doctor = sub.add_parser("doctor", description=COMMAND_SUMMARY["doctor"])
     _add_json(p_doctor)
 
-    p_comp = sub.add_parser("completion", help="print a shell completion script")
+    p_comp = sub.add_parser("completion", description=COMMAND_SUMMARY["completion"])
     p_comp.add_argument("shell", nargs="?", choices=completion.SHELLS)
     # 补全脚本在按 Tab 时调用它读取账号名；不是给人用的，所以不出现在帮助里。
     p_comp.add_argument("--list-accounts", action="store_true", help=argparse.SUPPRESS)
 
-    p_run = sub.add_parser("run", help="run a command with an account's environment (default: codex)",
+    p_run = sub.add_parser("run", description=COMMAND_SUMMARY["run"],
                            usage="multi-codex run [NAME] [-- COMMAND [ARG ...]]")
     # 省略 NAME 时按当前目录的绑定选账号（bind）。
     p_run.add_argument("name", nargs="?")
 
-    p_bind = sub.add_parser("bind", help="bind a directory to an account (no arguments: list bindings)")
+    p_bind = sub.add_parser("bind", description=COMMAND_SUMMARY["bind"])
     p_bind.add_argument("name", nargs="?")
     p_bind.add_argument("dir", nargs="?", help="directory to bind (default: current directory)")
     _add_dry_run(p_bind)
 
-    p_unbind = sub.add_parser("unbind", help="remove the binding of a directory")
+    p_unbind = sub.add_parser("unbind", description=COMMAND_SUMMARY["unbind"])
     p_unbind.add_argument("dir", nargs="?", help="directory to unbind (default: current directory)")
     _add_dry_run(p_unbind)
 
-    p_code = sub.add_parser("code", help="open VS Code for an account (experimental)",
+    p_code = sub.add_parser("code", description=COMMAND_SUMMARY["code"],
                             usage="multi-codex code NAME [PATH] [--bin CODE] [-- CODE_ARGS ...]")
     p_code.add_argument("name")
     p_code.add_argument("path", nargs="?")
     p_code.add_argument("--bin", help="path of the VS Code `code` command (default: `code` on PATH)")
 
-    p_app = sub.add_parser("app", help="open the Codex desktop app for an account (macOS, experimental)")
+    p_app = sub.add_parser("app", description=COMMAND_SUMMARY["app"])
     p_app.add_argument("name")
     p_app.add_argument("--app", help="path of the Codex desktop app (default {})".format(apps.DEFAULT_DESKTOP_APP))
 
-    p_path = sub.add_parser("path", help="print an account's directory")
+    p_path = sub.add_parser("path", description=COMMAND_SUMMARY["path"])
     p_path.add_argument("name")
 
-    p_env = sub.add_parser("env", help="list or change an account's extra environment variables")
+    p_env = sub.add_parser("env", description=COMMAND_SUMMARY["env"])
     p_env.add_argument("name")
     p_env.add_argument("assignments", nargs="*", metavar="KEY=VALUE", help="variables to set")
     p_env.add_argument("--unset", action="append", default=[], metavar="KEY", help="variable to remove")
     p_env.add_argument("--clear", action="store_true", help="remove all variables of the account")
     _add_dry_run(p_env)
 
-    p_use = sub.add_parser("use", help="show or change the default account (what ~/.codex points to)")
+    p_use = sub.add_parser("use", description=COMMAND_SUMMARY["use"])
     p_use.add_argument("name", nargs="?")
     p_use.add_argument("--skip-process-check", action="store_true",
                        help="switch even if a process may be using the current default account")
     _add_dry_run(p_use)
 
-    p_restore = sub.add_parser("restore", help="undo migrate-default: move an account back to ~/.codex")
+    p_restore = sub.add_parser("restore", description=COMMAND_SUMMARY["restore"])
     p_restore.add_argument("name")
     p_restore.add_argument("--skip-process-check", action="store_true",
                            help="do not check whether the account directory is in use")
@@ -190,6 +244,10 @@ def _split_run_command(argv: List[str]) -> Tuple[List[str], List[str]]:
 def main(argv: Optional[List[str]] = None) -> int:
     parser = build_parser()
     argv, run_command = _split_run_command(list(sys.argv[1:] if argv is None else argv))
+    if not argv:
+        # 不带任何参数：新用户最常见的第一次运行，给上手指引而不是 argparse 的“缺少 COMMAND”报错。
+        print_getting_started()
+        return accounts.EXIT_OK
     try:
         args = parser.parse_args(argv)
     except SystemExit as exc:
@@ -281,9 +339,13 @@ def dispatch(args: argparse.Namespace) -> int:
     if args.command == "migrate-default":
         name = _checked_name(args.name)
         proxy = _checked_proxy(args.proxy) if args.proxy is not None else None
-        return migrate.migrate_default(name, args.source, args.copy, args.keep_backup, proxy,
+        code = migrate.migrate_default(name, args.source, args.copy, args.keep_backup, proxy,
                                        args.skip_process_check, args.dry_run,
                                        accept_relogin=args.accept_relogin)
+        if code == accounts.EXIT_OK and not args.dry_run:
+            # 迁移过来的目录本来就带着登录，只提醒启动命令目录是否在 PATH 中。
+            _hint_after_setup(load_config()[0], name, check_login=False)
+        return code
 
     old, exists = load_config()
     new = old.copy()
@@ -328,14 +390,15 @@ def dispatch(args: argparse.Namespace) -> int:
     elif args.command == "proxy":
         account = new.find(_checked_name(args.name))
         if account is None:
-            error("account {!r} is not registered".format(args.name))
+            error(new.not_registered(args.name))
             return accounts.EXIT_ERROR
         account.proxy = _checked_proxy(args.value)
     elif args.command == "remove":
         name = _checked_name(args.name)
         account = new.find(name)
         if account is None:
-            info("{} is not registered".format(name))
+            # 退出码仍是 0（已处于目标状态）；下面照常收敛，负责清理这个名字残留的受管启动命令。
+            info("nothing to remove: {}".format(new.not_registered(name)))
         else:
             del new.accounts[account.name]
             binding.drop_account(new, account.name)
@@ -348,13 +411,13 @@ def dispatch(args: argparse.Namespace) -> int:
         name = _checked_name(args.name)
         account = new.find(name)
         if account is None:
-            error("account {!r} is not registered".format(name))
+            error(new.not_registered(name))
             return accounts.EXIT_ERROR
         _apply_env_changes(account, args)
     elif args.command == "bind":
         account = new.find(_checked_name(args.name))
         if account is None:
-            error("account {!r} is not registered".format(args.name))
+            error(new.not_registered(args.name))
             return accounts.EXIT_ERROR
         target = args.dir or os.getcwd()
         if not os.path.isdir(target):
@@ -388,14 +451,71 @@ def dispatch(args: argparse.Namespace) -> int:
             print_action(binding_change, dry_run=args.dry_run)
         else:
             info("binding not changed because of the errors above")
+    if args.command == "add" and code == accounts.EXIT_OK and not args.dry_run:
+        _hint_after_setup(new, args.name, check_login=True)
     return code
+
+
+def _hint_after_setup(config: Config, name: str, check_login: bool) -> None:
+    """add / migrate-default 成功后告诉用户下一步：未登录时怎么登录，启动命令目录不在 PATH 时怎么加。
+
+    只读：读一次 auth.json、扫描一次 PATH，不改任何文件，也不影响退出码。
+    """
+    account = config.find(name)
+    if account is None:
+        return
+    bin_dir = expand(config.bin_dir)
+    on_path = platform.dir_on_path(bin_dir)
+    if check_login:
+        found = identity.read_identity(accounts.account_dir(config, account.name))
+        # 只提示“未登录”；keyring、unreadable 等情况交给 doctor，那里有完整说明。
+        if found.login == identity.LOGIN_LOGGED_OUT:
+            if on_path:
+                hint("next: log in with `codex-{} login`".format(account.name))
+            else:
+                # codex-<名> 现在还找不到；run 用与启动命令相同的环境，不依赖 PATH。
+                hint("next: log in with `multi-codex run {} -- codex login`".format(account.name))
+    if not on_path:
+        sys.stdout.flush()  # 同 hint()：让警告排在动作行之后
+        warn("{} is not on PATH, so `codex-{}` will not be found; add it in your shell profile, "
+             "e.g. export PATH=\"{}:$PATH\"".format(display_path(bin_dir), account.name, bin_dir))
+
+
+def print_getting_started() -> None:
+    """不带参数运行时的上手指引（stdout，退出码 0）。
+
+    配置读不了时不报错，只给通用步骤：这里是新用户的第一眼，不能因为配置问题变成报错；
+    配置问题由 `multi-codex doctor` 负责说明。
+    """
+    try:
+        config, exists = load_config()
+    except (ConfigError, OSError):
+        config, exists = None, False
+    print("multi-codex: run several Codex accounts side by side.")
+    print()
+    names = list(config.accounts) if config is not None and exists else []
+    if names:
+        print("Accounts: {} (multi-codex list for details)".format(", ".join(names)))
+        print()
+        print("  codex-NAME                    use an account instead of codex")
+        print("  multi-codex usage             5-hour and weekly usage")
+        print("  multi-codex doctor            find problems and how to fix them")
+    else:
+        print("Get started:")
+        print("  multi-codex add NAME          create an account and its launcher codex-NAME")
+        print("  codex-NAME login              log in once")
+        print("  codex-NAME                    use it instead of codex")
+        if entry_kind(switch.default_link()) == KIND_DIR:
+            print("  multi-codex migrate-default NAME   keep your current ~/.codex login as an account")
+    print()
+    print("Run `multi-codex -h` for all commands.")
 
 
 def _config_copy_actions(new: Config, account: Account, other_name: str) -> Optional[List]:
     """校验 --config-from 并生成复制动作；校验失败时输出原因并返回 None（退出码 1），参数错误抛 UsageError。"""
     other = new.find(_checked_name(other_name))
     if other is None:
-        error("account {!r} is not registered".format(other_name))
+        error(new.not_registered(other_name))
         return None
     if other.name.casefold() == account.name.casefold():
         raise UsageError("--config-from must name another account")
@@ -544,9 +664,10 @@ def cmd_list(as_json: bool = False) -> int:
         _warn_duplicates(duplicates, entries)
         return accounts.EXIT_OK
 
-    print("root: {}".format(expand(config.root)))
-    print("bin_dir: {}".format(expand(config.bin_dir)))
-    print("shared.dir: {}".format(expand(config.shared_dir) if config.shared_dir else "(not set)"))
+    print("root: {}".format(display_path(expand(config.root))))
+    print("bin_dir: {}".format(display_path(expand(config.bin_dir))))
+    # 表头路径缩写成 ~/… 只为好读；行数不变，按行位置解析表格的脚本不受影响（脚本应使用 --json）。
+    print("shared.dir: {}".format(display_path(expand(config.shared_dir)) if config.shared_dir else "(not set)"))
     print("default: {}".format(switch.describe_default(config)[1]))
     if not config.accounts:
         print("no accounts registered")
@@ -590,7 +711,7 @@ def cmd_usage(args: argparse.Namespace) -> int:
     for name, account in targets:
         if account is None:
             result = usage.UsageResult(name, usage.SOURCE_LIVE if args.live else usage.SOURCE_LOCAL, False,
-                                       "account is not registered", None, False, [])
+                                       config.not_registered(name), None, False, [])
         elif args.live:
             status = accounts.launcher_status(config, account.name)
             if status != "ok":
@@ -673,7 +794,7 @@ def cmd_run(name: Optional[str], command: List[str]) -> int:
         print("[multi-codex] using account {} (bound to {})".format(name, bound_dir), file=sys.stderr)
     account = config.find(name) if exists else None
     if account is None:
-        error("account {!r} is not registered".format(name))
+        error(config.not_registered(name))
         return accounts.EXIT_ERROR
     argv, env = _account_exec_args(config, account, command or ["codex"])
     sys.stdout.flush()
@@ -686,7 +807,7 @@ def _registered_with_dir(name: str) -> Tuple[Optional[Config], Optional[Account]
     config, exists = load_config()
     account = config.find(name) if exists else None
     if account is None:
-        error("account {!r} is not registered".format(name))
+        error(config.not_registered(name))
         return None, None
     directory = accounts.account_dir(config, account.name)
     if not os.path.isdir(directory):
@@ -776,7 +897,7 @@ def cmd_path(name: str) -> int:
     config, exists = load_config()
     account = config.find(name) if exists else None
     if account is None:
-        error("account {!r} is not registered".format(name))
+        error(config.not_registered(name))
         return accounts.EXIT_ERROR
     directory = accounts.account_dir(config, account.name)
     print(directory)
@@ -789,7 +910,7 @@ def cmd_env_list(name: str) -> int:
     config, exists = load_config()
     account = config.find(name) if exists else None
     if account is None:
-        error("account {!r} is not registered".format(name))
+        error(config.not_registered(name))
         return accounts.EXIT_ERROR
     for key in sorted(account.env):
         print("{}={}".format(key, account.env[key]))
@@ -798,7 +919,15 @@ def cmd_env_list(name: str) -> int:
 
 def cmd_use_show() -> int:
     config, _ = load_config()
-    print(switch.describe_default(config)[1])
+    owner, description = switch.describe_default(config)
+    # stdout 保持原样（脚本可能读取账号名或 `(none)`），下一步提示写 stderr。
+    print(description)
+    if owner is None:
+        kind = entry_kind(switch.default_link())
+        if kind == KIND_MISSING:
+            hint("no default account yet; `multi-codex use NAME` makes ~/.codex point to an account")
+        elif kind == KIND_DIR:
+            hint("~/.codex is not managed yet; run `multi-codex migrate-default NAME` first")
     return accounts.EXIT_OK
 
 

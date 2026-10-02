@@ -4,6 +4,7 @@ config.json 是唯一的权威源，启动命令、共享链接都是从它推�
 本模块只负责数据本身，不创建或删除任何账号文件。
 """
 
+import difflib
 import json
 import os
 import re
@@ -90,6 +91,25 @@ class Config(object):
             if account.name.casefold() == folded:
                 return account
         return None
+
+    def not_registered(self, name: str) -> str:
+        """账号不存在时的报错文本，附带下一步：相近的账号名、已登记的账号，或先 add。
+
+        前半句 `account '<名>' is not registered` 保持旧版原文，按它 grep 的脚本和日志检索不受影响。
+        相近匹配用 casefold 比较，与 find() 的大小写不敏感一致；给出的名字用登记时的原始大小写。
+        """
+        message = "account {!r} is not registered".format(name)
+        names = list(self.accounts)
+        folded = {account.casefold(): account for account in names}
+        close = difflib.get_close_matches(name.casefold(), list(folded), n=1, cutoff=0.6)
+        if close:
+            return "{}; did you mean {!r}?".format(message, folded[close[0]])
+        if not names:
+            return "{}; run `multi-codex add NAME` first".format(message)
+        # 账号多时整列打出来反而难读，只在不超过 5 个时列出。
+        if len(names) <= 5:
+            return "{}; registered: {}".format(message, ", ".join(names))
+        return message
 
     def copy(self) -> "Config":
         return Config(self.root, self.bin_dir, self.shared_dir, self.shared_items,
@@ -270,6 +290,11 @@ def normalize_proxy(value: object) -> str:
         port = int(value)
         _check_port(port)
         return "http://127.0.0.1:{}".format(port)
+    # 既不是端口也不是 URL（如 `abc`、`127.0.0.1:7901`）：urlsplit 会给出空的或奇怪的 scheme，
+    # 原来的“unsupported proxy scheme ''”让人看不懂，这里直接说明可以填什么。
+    if "://" not in value:
+        raise ValueError("invalid proxy {!r}: use a port number (e.g. 7901), a URL such as "
+                         "http://127.0.0.1:7901, 'off' or 'inherit'".format(value))
     parts = urllib.parse.urlsplit(value)
     if parts.scheme not in PROXY_SCHEMES:
         raise ValueError("unsupported proxy scheme {!r}; use one of {}".format(

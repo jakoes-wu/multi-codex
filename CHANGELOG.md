@@ -6,6 +6,29 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- Running `multi-codex` without arguments prints a short getting-started guide
+  (exit code 0) instead of an argument error.
+- `add` and `migrate-default` print the next step on stderr: how to log in, and
+  a warning when the launcher directory is not on `PATH`.
+- `-h` groups the commands into "Get started", "Everyday" and "Advanced" and
+  shows examples.
+- An unknown account name suggests the closest registered name ("did you mean
+  ...?"), lists the registered accounts, or points to `multi-codex add`.
+- `use` without arguments adds a hint on stderr when there is no default
+  account yet.
+- `install.sh` ends with the next step and how to enable tab completion.
+
+### Changed
+
+- Paths in action lines and in the `list` header are shown as `~/...`. `path`,
+  `--json` and error details still use absolute paths.
+- A proxy value that is neither a port nor a URL (for example `abc`) gets an
+  error that lists the accepted values.
+- `remove` of an account that is not registered says "nothing to remove"
+  (exit code 0 as before).
+
 ## [0.5.0] - 2026-10-01
 
 ### Added

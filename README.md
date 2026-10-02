@@ -52,6 +52,8 @@ multi-codex add personal
 
 Each command creates a directory (`~/.cx/work`) and a launcher (`codex-work`). A name starts with a letter or digit and may contain letters, digits and `._@+-`; an e-mail address works too.
 
+After `add`, multi-codex prints the next step: the login command, and a warning if `~/.local/bin` is not on your `PATH` yet. Running `multi-codex` without arguments shows these steps again.
+
 If an account should go through a proxy, give it a local port or a URL, for example `multi-codex add work --proxy 7901` (the same as `http://127.0.0.1:7901`). See [Proxy values](#proxy-values).
 
 ### 2. Log in once per account

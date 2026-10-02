@@ -232,3 +232,19 @@ def diff_manifests(expected: Dict[str, ManifestEntry], actual: Dict[str, Manifes
     mismatched = [rel for rel in expected if actual.get(rel) != expected[rel]]
     mismatched.extend(rel for rel in actual if rel not in expected)
     return sorted(set(mismatched))
+
+
+def display_path(path: str) -> str:
+    """把 HOME 下的路径缩写成 `~/…`，只用于给人看的输出。
+
+    脚本读取的输出（`path` 命令、`--json`）不得使用它：`~` 交给不经 shell 的程序时不会被展开。
+    HOME 为空或为 `/` 时不缩写，否则所有路径都会变成 `~` 开头。
+    """
+    home = os.path.expanduser("~")
+    if not home or home == os.sep:
+        return path
+    if path == home:
+        return "~"
+    if path.startswith(home + os.sep):
+        return "~" + path[len(home):]
+    return path

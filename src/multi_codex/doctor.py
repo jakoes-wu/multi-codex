@@ -107,8 +107,7 @@ def _check_migration() -> Check:
 
 
 def _check_path(bin_dir: str) -> Check:
-    entries = [os.path.realpath(expand(entry)) for entry in os.environ.get("PATH", "").split(os.pathsep) if entry]
-    if os.path.realpath(bin_dir) in entries:
+    if platform.dir_on_path(bin_dir):
         return Check("path", OK, "{} is in PATH".format(bin_dir))
     return Check("path", WARN, "{} is not in PATH; codex-<name> launchers cannot be found".format(bin_dir),
                  "add {} to PATH in your shell profile".format(bin_dir))

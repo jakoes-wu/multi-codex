@@ -287,3 +287,13 @@ if [ -n "$CONFIG_FILE" ]; then
   log "applying ${CONFIG_FILE}"
   "$WRAPPER" apply -f "$CONFIG_FILE"
 fi
+
+# Next steps for new users. With --config the accounts already exist, so only completion is suggested.
+if [ -z "$CONFIG_FILE" ]; then
+  log "next: multi-codex add NAME   (or multi-codex migrate-default NAME to keep your current ~/.codex login)"
+fi
+case "$(basename "${SHELL:-}")" in
+  bash) log "tab completion: add  eval \"\$(multi-codex completion bash)\"  to ~/.bashrc" ;;
+  zsh) log "tab completion: add  eval \"\$(multi-codex completion zsh)\"  to ~/.zshrc (after compinit)" ;;
+  fish) log "tab completion: add  multi-codex completion fish | source  to ~/.config/fish/config.fish" ;;
+esac

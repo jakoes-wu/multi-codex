@@ -192,7 +192,8 @@ class SharedTest(CliTestCase):
         account = os.path.join(self.root, "work")
         os.symlink(os.path.join(self.shared, "skills"), os.path.join(account, "skills"))
         result = self.ok("add", "work", "--shared")
-        self.assertIn("unchanged shared-link {}".format(os.path.join(account, "skills")), result.out)
+        # 动作行里的路径缩写成 ~/…（feature-onboarding-hints A6）。
+        self.assertIn("unchanged shared-link ~/.cx/work/skills", result.out)
         self.assertEqual(self.managed_links("work"), ["AGENTS.md"])
         self.ok("add", "work", "--no-shared")
         self.assertTrue(os.path.islink(os.path.join(account, "skills")))
@@ -210,7 +211,7 @@ class SharedTest(CliTestCase):
         account = self._user_links(["AGENTS.md", "skills"])
         before = {item: os.lstat(os.path.join(account, item)).st_ino for item in ("AGENTS.md", "skills")}
         result = self.ok("add", "work", "--shared", "--adopt")
-        self.assertIn("update shared-link {} (adopted)".format(os.path.join(account, "skills")), result.out)
+        self.assertIn("update shared-link ~/.cx/work/skills (adopted)", result.out)
         self.assertEqual(self.managed_links("work"), ["AGENTS.md", "skills"])
         after = {item: os.lstat(os.path.join(account, item)).st_ino for item in ("AGENTS.md", "skills")}
         self.assertEqual(before, after, "adopted links must not be recreated")
