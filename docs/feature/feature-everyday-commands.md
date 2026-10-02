@@ -1,6 +1,6 @@
 # multi-codex v0.8：日常操作补齐
 
-> 2026-10-02 注记：方案已定（plan-review 两轮收敛），代码待落地。基线：main `e79b4b1`（v0.7.0）。
+> 2026-10-02 注记：已落地（PR #22，main `3a94b42`），随 v0.8.0 发布。主要实现位置：`src/multi_codex/cli.py` 的 `_add_account_options`、`_unknown_command`、`dispatch` 的 add/set 分支、`_hint_shared_dir`、`_print_list_summary`、`_usage_cell`；`src/multi_codex/shellpath.py`；`install.sh` 的 PATH 提示。测试：`tests/test_everyday.py`。基线：main `e79b4b1`（v0.7.0）。
 >
 > 用户的决定（2026-10-02）：
 >
