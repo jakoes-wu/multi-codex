@@ -6,9 +6,9 @@
 
 ## 1. 背景
 
-v0.4 的 `multi-codex run NAME -- CMD` 必须写出账号名，账号名通常是邮箱，比较长。路线中的 U11（`~/.claude-shared/playbook/multi-codex-competitors.md` §5.3）要求：把一个目录绑定到某个账号，在这个目录或它的子目录下执行 `run` 时可以省略账号名。
+v0.4 的 `multi-codex run NAME -- CMD` 必须写出账号名，账号名通常是邮箱，比较长。路线中的 U11 要求：把一个目录绑定到某个账号，在这个目录或它的子目录下执行 `run` 时可以省略账号名。
 
-竞品 Ducksss/codex-profiles 的做法是 `workspace bind . work`，按最近一个已绑定的父目录决定账号，绑定信息只存在工具自己的配置里，不改项目文件。本方案采用同样的规则。
+开源项目 Ducksss/codex-profiles 的做法是 `workspace bind . work`，按最近一个已绑定的父目录决定账号，绑定信息只存在工具自己的配置里，不改项目文件。本方案采用同样的规则。
 
 ## 2. 目标 / 非目标
 

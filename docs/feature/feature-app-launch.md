@@ -12,7 +12,7 @@
 
 ## 1. 背景
 
-账号用启动命令 `codex-<名>` 隔离，但 VS Code 中的 OpenAI 扩展和 Codex 桌面端只会使用它们启动时环境里的 `CODEX_HOME`；没有设置时就是 `~/.codex`。路线中的 U12（`~/.claude-shared/playbook/multi-codex-competitors.md` §5.3）要求：按账号打开独立的 VS Code 窗口和桌面端实例。
+账号用启动命令 `codex-<名>` 隔离，但 VS Code 中的 OpenAI 扩展和 Codex 桌面端只会使用它们启动时环境里的 `CODEX_HOME`；没有设置时就是 `~/.codex`。路线中的 U12 要求：按账号打开独立的 VS Code 窗口和桌面端实例。
 
 ### 1.1 已核实的事实（本机 macOS，只读调查）
 
@@ -31,7 +31,7 @@
 | 桌面端的用户数据目录取自 `CODEX_ELECTRON_USER_DATA_PATH`，只有设置了它，正式包才申请单实例锁（锁按用户数据目录区分） | `app.asar` 中的 `ee(...)` 与 `wD({isMacOS,isPackaged,hasExplicitUserDataPath})` |
 | 桌面端启动后用 `Object.assign(process.env, userEnv)` 把登录 shell 的环境整体合并进来，之后只恢复 `CODEX_HOME`；所以代理变量和同名的其它变量都以登录 shell 的值为准 | `app.asar` 偏移约 3777881：`Object.assign(process.env,s.userEnv),Mb!=null&&(process.env.CODEX_HOME=Mb)` |
 | 桌面端内部的 demo 启动器同时传 `CODEX_HOME`、`CODEX_ELECTRON_USER_DATA_PATH` 和 `--user-data-dir` | `app.asar`：`` [`-n`,`--env`,`CODEX_HOME=`+e,`--env`,`CODEX_ELECTRON_USER_DATA_PATH=`+t,...,`--args`,`--user-data-dir=`+t] ``（已亲自核对原文） |
-| 竞品 Ducksss/codex-profiles 同样同时传这两个变量；open-profile-manager 只传 `CODEX_HOME` 和 `--user-data-dir` | Ducksss `bin/codex-profile:1620-1669`；opm `Sources/ProfileCore/ProcessLaunch.swift:192-212` |
+| 开源项目 Ducksss/codex-profiles 同样同时传这两个变量；open-profile-manager 只传 `CODEX_HOME` 和 `--user-data-dir` | Ducksss `bin/codex-profile:1620-1669`；opm `Sources/ProfileCore/ProcessLaunch.swift:192-212` |
 
 ## 2. 目标 / 非目标
 
@@ -89,7 +89,7 @@
 4. 用户数据目录 D = `<root>/.apps/<名>/desktop`，不存在时创建（0700）。日志 L = `<root>/.apps/<名>/desktop.log`，不存在时创建（0600）。
 5. 执行 `open -n --env CODEX_HOME=<账号目录> --env CODEX_ELECTRON_USER_DATA_PATH=D --stdout L --stderr L -a <应用路径> --args --user-data-dir=D`。`open` 固定使用 `/usr/bin/open`（不从 PATH 查找，避免同名命令被误用）；测试用专用环境变量 `MULTI_CODEX_TEST_OPEN` 替换成假命令，沿用现有 `MULTI_CODEX_TEST_*` 的命名。
    - `CODEX_ELECTRON_USER_DATA_PATH` 让桌面端使用 D 作为用户数据目录、按 D 申请单实例锁，并在合并登录 shell 环境之后把 `CODEX_HOME` 恢复为账号目录（§1.1）；
-   - `--user-data-dir` 与桌面端自己的 demo 启动器、两个竞品的写法一致。
+   - `--user-data-dir` 与桌面端自己的 demo 启动器、上述两个开源项目的写法一致。
 6. `open` 退出码不为 0 时，`app` 返回 1，并显示 `open` 的 stderr。否则输出 `started Codex desktop for NAME (log <L>)`，返回 0。`open` 只负责交给 LaunchServices，应用随后的启动失败要看 L。
 7. 同一个账号已有桌面端实例在运行时，桌面端自己的单实例锁会处理（行为由桌面端决定，未实测）。
 

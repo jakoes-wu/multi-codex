@@ -15,7 +15,7 @@
 - 换一个账号作为默认账号：手工改这个软链；
 - 撤销迁移：按 README 的步骤删软链、把目录移回、注销账号。
 
-本方案对应路线中的 U9（`~/.claude-shared/playbook/multi-codex-competitors.md` §5.2）。
+本方案对应路线中的 U9。
 
 ### 1.1 上游事实
 

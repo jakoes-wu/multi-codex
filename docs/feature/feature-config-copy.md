@@ -6,7 +6,7 @@
 
 ## 1. 背景
 
-新建账号后，`config.toml` 是空的，模型、MCP 服务器、已信任的项目等设置都要重新配置。路线中的 U13（`~/.claude-shared/playbook/multi-codex-competitors.md` §5.3）要求：创建或调整账号时，可以从另一个账号复制一份 `config.toml`。竞品 codex-homes 的 `add --from` 也是这样做的。
+新建账号后，`config.toml` 是空的，模型、MCP 服务器、已信任的项目等设置都要重新配置。路线中的 U13 要求：创建或调整账号时，可以从另一个账号复制一份 `config.toml`。开源项目 codex-homes 的 `add --from` 也是这样做的。
 
 ## 2. 目标 / 非目标
 
