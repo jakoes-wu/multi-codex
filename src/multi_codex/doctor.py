@@ -117,8 +117,9 @@ def _check_env() -> Check:
     found = [name for name in ("CODEX_HOME",) + platform.ISOLATION_BREAKING_ENV if os.environ.get(name)]
     if not found:
         return Check("env", OK, "no variables that override per-account isolation")
-    return Check("env", WARN, "set in this shell: {}; they override or bypass per-account isolation".format(
-        ", ".join(found)), "unset {}".format(" ".join(found)))
+    # CODEX_HOME 由启动命令重新设置，另外三个由启动命令清除；仍值得提醒，因为直接运行 codex 时它们照样生效。
+    return Check("env", WARN, "set in this shell: {}; launchers override or clear them, but plain codex "
+                 "still uses them".format(", ".join(found)), "unset {}".format(" ".join(found)))
 
 
 def _check_default_dir(config) -> Check:

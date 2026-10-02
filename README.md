@@ -118,6 +118,7 @@ Without a name, the account is named after the e-mail address in `~/.codex/auth.
 | Set up all accounts on a new machine | `curl -fsSL https://raw.githubusercontent.com/jakoes-wu/multi-codex/main/install.sh \| sh -s -- --config accounts.json` | [Declarative setup](#declarative-setup-with-apply) |
 | Get tab completion | `eval "$(multi-codex completion zsh)"` | [Shell completion](#shell-completion) |
 | See what a command would change | add `--dry-run` | [Commands](#commands) |
+| Rename an account | `multi-codex rename work client-a` (the directory and login stay) | [Renaming accounts](#renaming-accounts) |
 | Remove an account | `multi-codex remove work` (the directory is kept) | [Commands](#commands) |
 
 More questions are answered in the [FAQ](#faq).
@@ -135,8 +136,9 @@ More questions are answered in the [FAQ](#faq).
 | ---- | ---- |
 | `multi-codex init [--root DIR] [--bin-dir DIR] [--shared-dir DIR] [--shared-items A,B]` | Create or change global settings. |
 | `multi-codex migrate-default [NAME] [--source DIR] [--copy] [--keep-backup] [--proxy P] [--skip-process-check] [--accept-relogin]` | Turn the default directory into an account. Without NAME, the e-mail address in its `auth.json` is used. |
-| `multi-codex add NAME [--proxy P] [--shared [DIR] \| --no-shared] [--adopt] [--config-from OTHER]` | Add an account, adopt an existing directory, or change its options. `--config-from` copies `config.toml` from another account once. |
-| `multi-codex set NAME [--proxy P] [--shared [DIR] \| --no-shared] [--adopt] [--config-from OTHER]` | Change an existing account; same options as `add`, but never creates one. |
+| `multi-codex add NAME [--proxy P] [--shared [DIR] \| --no-shared] [--shared-exclude ITEM] [--shared-include ITEM] [--adopt] [--config-from OTHER]` | Add an account, adopt an existing directory, or change its options. `--config-from` copies `config.toml` from another account once. |
+| `multi-codex set NAME [same options as add]` | Change an existing account; same options as `add`, but never creates one. |
+| `multi-codex rename OLD NEW` | Rename an account and its launcher; the directory, login and links stay. |
 | `multi-codex login NAME [-- ARGS]` | Run `codex login` with an account's environment; arguments after `--` go to `codex login`. Does not need `~/.local/bin` on `PATH`. |
 | `multi-codex proxy NAME PORT\|URL\|off\|inherit` | Set an account's proxy. |
 | `multi-codex remove NAME` | Unregister an account and delete its launcher. **The account directory is kept.** |
@@ -154,7 +156,7 @@ More questions are answered in the [FAQ](#faq).
 | `multi-codex restore NAME [--skip-process-check] [--accept-relogin]` | Undo `migrate-default`: move the account back to `~/.codex`. |
 | `multi-codex completion bash\|zsh\|fish` | Print a shell completion script. |
 
-Every write command accepts `--dry-run`. `init`, `add`, `set`, `proxy`, `remove`, `apply`, `bind`, `unbind` and `env` print only the items they change (or `already up to date`); `-v` / `--verbose` also prints unchanged items. For `list`, `-v` means the full table instead. `list`, `usage` and `doctor` never change anything; with `--json` they print a single JSON object on stdout (with a `"version": 1` field) and keep warnings on stderr. Use `--json` in scripts: the table layout is not guaranteed to stay the same.
+Every write command accepts `--dry-run`. `init`, `add`, `set`, `rename`, `proxy`, `remove`, `apply`, `bind`, `unbind` and `env` print only the items they change (or `already up to date`); `-v` / `--verbose` also prints unchanged items. For `list`, `-v` means the full table instead. `list`, `usage` and `doctor` never change anything; with `--json` they print a single JSON object on stdout (with a `"version": 1` field) and keep warnings on stderr. Use `--json` in scripts: the table layout is not guaranteed to stay the same.
 
 ### Login and usage
 
@@ -209,6 +211,14 @@ multi-codex unbind                             # remove the binding of the curre
 
 `multi-codex add new --config-from work` copies `config.toml` from `work` into `new` once; afterwards the two files are independent. An existing `config.toml` with different content is a conflict (nothing is written), and so is copying into an account that shares `config.toml`. The copy includes everything in the file, such as `cli_auth_credentials_store` or absolute paths that point into the other account.
 
+### Renaming accounts
+
+```sh
+multi-codex rename work client-a
+```
+
+The account and its launcher get the new name (`codex-client-a`; `codex-work` is deleted), and directory bindings and the default account follow. The directory stays where it is, so the login, sessions and shared links are kept; `config.json` records it as `"dir": "work"` (in `list --json`, `dir` is the full path instead). A name that is still used as another account's directory, such as `work` after this rename, cannot be given to a new account. Renaming only the letter case is not supported. Before downgrading to a version older than 0.9, rename the account back: older versions ignore `dir` and would use `<root>/client-a`.
+
 ### Per-account environment variables
 
 ```sh
@@ -217,6 +227,8 @@ multi-codex env work                      # list
 multi-codex env work --unset TERM_PROGRAM
 multi-codex env work --clear
 ```
+
+Launchers (and `run`, `login`, `code` and `usage --live`, which use the same environment) clear `CODEX_API_KEY`, `CODEX_ACCESS_TOKEN` and `CODEX_SQLITE_HOME` inherited from your shell, so one exported API key or database location does not leak into every account. An account that needs an API key sets it here, for example `multi-codex env work CODEX_API_KEY=sk-…`; per-account variables are applied after the clearing.
 
 The variables are stored in `config.json` (`accounts.<name>.env`) and written into the launcher. Values are used literally (no `$VAR` expansion). `CODEX_HOME` and the proxy variables are reserved: use `multi-codex proxy` for proxies. A launcher with environment variables is readable only by you (mode 0700), and `list --json` shows only the variable names; still, the values are stored in plain text, so do not put secrets there that need stronger protection. Older versions of multi-codex ignore the `env` field and drop it on their next write; run `multi-codex env NAME --clear` before downgrading.
 
@@ -303,7 +315,7 @@ Progress is recorded in `~/.config/multi-codex/migrate-journal.json`. If the mig
 
 Sockets and FIFOs (runtime files such as `ipc.sock`) are not copied in copy mode. On macOS, copy mode does not preserve extended attributes.
 
-If `CODEX_HOME`, `CODEX_SQLITE_HOME`, `CODEX_API_KEY` or `CODEX_ACCESS_TOKEN` is set in your environment, multi-codex warns you: these variables override or bypass per-account isolation.
+If `CODEX_HOME`, `CODEX_SQLITE_HOME`, `CODEX_API_KEY` or `CODEX_ACCESS_TOKEN` is set in your environment, multi-codex warns you: launchers set or clear them, but plain `codex` still uses them.
 
 ### Undoing a migration
 
@@ -337,6 +349,10 @@ multi-codex creates the missing links and remembers which links it created. Turn
 
 If you already linked an account to the shared directory by hand, `multi-codex set NAME --shared --adopt` takes those links over without recreating them: from then on, turning sharing off removes them as well. Only links that already point to the matching shared item are adopted.
 
+One account can opt out of some shared items: `multi-codex set work --shared-exclude skills` removes the `skills` link multi-codex created in `work` (as if sharing were off for that item) and no longer creates it; `--shared-include skills` undoes that. Both options can be repeated, names match `shared.items` exactly, and `list` shows the exclusions as `yes (not: skills)`. To exclude `config.toml` and then copy another account's settings into it, run `--shared-exclude config.toml` and `--config-from` as two separate commands.
+
+Items that hold one account's own state can never be shared: `shared.items` must not contain the entries marked "No" in the table below. A configuration that lists one fails to load and names the item; remove it from `config.json`.
+
 ### What can be shared
 
 Based on the Codex source code (openai/codex at `6b4daafd`):
@@ -351,7 +367,7 @@ Based on the Codex source code (openai/codex at `6b4daafd`):
 | `history.jsonl` | Prompt history | Yes | Reads and writes are file-locked; the histories of the accounts are merged. |
 | `auth.json`, `secrets/`, `.credentials.json`, `.env` | Credentials | **No** | They are the account. |
 | `installation_id` | Installation identifier | No | Sent with requests; sharing makes several accounts look like one installation. |
-| `*.sqlite` (`state_5.sqlite`, …) | Threads, logs, memories | **No** | `state_5.sqlite` records account IDs. |
+| `*.sqlite`, `*.sqlite-wal`, `*.sqlite-shm` (`state_5.sqlite`, …), `sqlite/` | Threads, logs, memories | **No** | `state_5.sqlite` records account IDs. |
 | `sessions/`, `archived_sessions/`, `session_index.jsonl` | Session logs | No | The index has only an in-process lock; sessions record the account that created them. |
 | `models_cache.json`, `cache/` | Caches | Not needed | Keyed by the account; a mismatch is a cache miss. |
 | `app-server-control/`, `app-server-daemon/`, `packages/`, `tmp/`, `.tmp/`, `log/`, `shell_snapshots/` | Runtime state | No | Per process or per session. |
@@ -414,7 +430,10 @@ Run the installer again; configuration, accounts and launchers are not touched:
 ```sh
 curl -fsSL https://raw.githubusercontent.com/jakoes-wu/multi-codex/main/install.sh | sh
 multi-codex --version
+multi-codex apply      # after upgrading from 0.8 or older: rewrites the launchers
 ```
+
+0.9 changed what the launchers contain. Until `multi-codex apply` (or any other write command) rewrites them, `list` shows `launcher stale` and `usage --live` refuses to run; the old launchers keep working.
 
 ## Exit codes
 

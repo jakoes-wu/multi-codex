@@ -19,6 +19,21 @@ DEFAULT_SHARED_ITEMS = ["AGENTS.md", "skills", "rules", "agents"]
 # `add/set NAME --shared` 不带目录、且 shared.dir 尚未设置时使用的共享目录；按原样写入配置，用到时再展开 `~`。
 DEFAULT_SHARED_DIR = "~/.codex-shared"
 
+# 禁止共享清单（feature-isolation-sharing-rename §5.1.2）：这些条目保存账号自己的凭据、标识、数据库、
+# 会话或运行时状态，软链成同一份会让账号互相串号或损坏数据库。与 README「What can be shared」表中
+# 标 No 的行一一对应，改这里要同步改 README 两个语言版本。按大小写不敏感比较：macOS 默认文件系统
+# 不区分大小写，`Auth.json` 与 `auth.json` 是同一个文件。
+UNSHAREABLE_ITEMS = ("auth.json", ".credentials.json", "secrets", ".env", "installation_id", "sqlite",
+                     "sessions", "archived_sessions", "session_index.jsonl", "app-server-control",
+                     "app-server-daemon", "packages", "tmp", ".tmp", "log", "shell_snapshots")
+# SQLite 数据库及其 WAL、共享内存文件（state_5.sqlite、logs_2.sqlite-wal 等，名字带版本号，只能按后缀判断）。
+UNSHAREABLE_SUFFIXES = (".sqlite", ".sqlite-wal", ".sqlite-shm")
+
+
+def is_unshareable(item: str) -> bool:
+    folded = item.casefold()
+    return folded in UNSHAREABLE_ITEMS or folded.endswith(UNSHAREABLE_SUFFIXES)
+
 # 以字母或数字开头：不会被当成命令行选项，也不会以 `.` 开头与 `.migration` 等目录混淆。
 NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._@+-]{0,63}$")
 
@@ -46,18 +61,28 @@ class Account(object):
     关闭共享时只删除这些链接，用户自己建的同名链接不受影响。
 
     env 是写进启动命令的额外环境变量，值按字面写入、不经 shell 求值。
+
+    shared_exclude 是用户配置：共享开启时不链接的条目（按名称精确匹配 shared.items）。
+
+    dir_name 是账号目录在根目录下的名字，缺省等于账号名。rename 只改账号名、不改它：
+    凭据在系统钥匙串时，钥匙串条目按 CODEX_HOME 的路径区分，目录一改就掉登录。
+    它是工具内部状态，apply -f 不能修改已登记账号的这个值。
     """
 
     def __init__(self, name: str, proxy: str = PROXY_INHERIT, shared: bool = False,
-                 managed_links: Optional[List[str]] = None, env: Optional[Dict[str, str]] = None) -> None:
+                 managed_links: Optional[List[str]] = None, env: Optional[Dict[str, str]] = None,
+                 shared_exclude: Optional[List[str]] = None, dir_name: Optional[str] = None) -> None:
         self.name = name
         self.proxy = proxy
         self.shared = shared
         self.managed_links = list(managed_links or [])
         self.env = dict(env or {})
+        self.shared_exclude = list(shared_exclude or [])
+        self.dir_name = dir_name or name
 
     def copy(self) -> "Account":
-        return Account(self.name, self.proxy, self.shared, list(self.managed_links), dict(self.env))
+        return Account(self.name, self.proxy, self.shared, list(self.managed_links), dict(self.env),
+                       list(self.shared_exclude), self.dir_name)
 
     def to_dict(self) -> dict:
         data = {"proxy": self.proxy, "shared": self.shared, "managed_links": list(self.managed_links)}
@@ -66,6 +91,11 @@ class Account(object):
         # 按键名排序：apply -f 文件里键的顺序不同，不应被当成改动。
         if self.env:
             data["env"] = {key: self.env[key] for key in sorted(self.env)}
+        # 下面两个字段同理：只在有内容时写出，0.8 的配置读入再写回逐字不变。
+        if self.shared_exclude:
+            data["shared_exclude"] = list(self.shared_exclude)
+        if self.dir_name != self.name:
+            data["dir"] = self.dir_name
         return data
 
 
@@ -188,6 +218,11 @@ def parse_config(raw: str, source: str) -> Config:
     shared_items = shared.get("items", DEFAULT_SHARED_ITEMS)
     if not isinstance(shared_items, list) or not all(_valid_item(item) for item in shared_items):
         raise ConfigError("{}: 'shared.items' must be a list of plain file names".format(source))
+    for item in shared_items:
+        if is_unshareable(item):
+            # 所有命令都在读配置时失败，init --shared-items 也改不掉，所以直接告诉用户去编辑哪个文件。
+            raise ConfigError("{0}: 'shared.items' must not include {1!r}: it holds account-specific state; "
+                              "edit {0} and remove it".format(source, item))
 
     accounts_raw = data.get("accounts", {})
     if not isinstance(accounts_raw, dict):
@@ -203,6 +238,7 @@ def parse_config(raw: str, source: str) -> Config:
                 source, seen[folded], name))
         seen[folded] = name
         accounts[name] = _parse_account(name, value, source)
+    _check_dir_names(accounts, source)
 
     bindings = data.get("bindings", {})
     if not isinstance(bindings, dict):
@@ -213,6 +249,22 @@ def parse_config(raw: str, source: str) -> Config:
                 or not NAME_PATTERN.match(name):
             raise ConfigError("{}: invalid binding {!r} -> {!r}".format(source, path, name))
     return Config(root, bin_dir, shared_dir, shared_items, accounts, bindings)
+
+
+def _check_dir_names(accounts: Dict[str, Account], source: str) -> None:
+    """账号目录名大小写不敏感互不相同，且账号名不等于另一个账号的目录名。
+
+    后一条防的是：rename work job 之后，又登记一个叫 work 的账号——它的目录 <root>/work 正是 job 在用的。
+    accounts.dir_conflicts 在收敛计划里按同样规则判冲突，这里兜住手写的配置文件。
+    """
+    for name, account in accounts.items():
+        for other_name, other in accounts.items():
+            if other_name == name:
+                continue
+            if account.dir_name.casefold() == other.dir_name.casefold() or \
+                    name.casefold() == other.dir_name.casefold():
+                raise ConfigError("{}: account {!r} would use the directory of account {!r}".format(
+                    source, name, other_name))
 
 
 def _string_field(data: dict, key: str, default: str, source: str) -> str:
@@ -250,7 +302,22 @@ def _parse_account(name: str, value: object, source: str) -> Account:
             validate_env_value(item)
         except ValueError as exc:
             raise ConfigError("{}: account {!r}: {}".format(source, name, exc))
-    return Account(name, proxy, shared, links, env)
+    exclude = value.get("shared_exclude", [])
+    if not isinstance(exclude, list) or not all(_valid_item(item) for item in exclude):
+        raise ConfigError("{}: account {!r}: 'shared_exclude' must be a list of names".format(source, name))
+    dir_name = value.get("dir", name)
+    if not isinstance(dir_name, str) or not NAME_PATTERN.match(dir_name):
+        raise ConfigError("{}: account {!r}: 'dir' must be a valid account directory name".format(source, name))
+    return Account(name, proxy, shared, links, env, unique_items(exclude), dir_name)
+
+
+def unique_items(items: List[str]) -> List[str]:
+    """去重并保持首次出现的顺序。"""
+    result: List[str] = []
+    for item in items:
+        if item not in result:
+            result.append(item)
+    return result
 
 
 def validate_name(name: str) -> None:

@@ -16,8 +16,10 @@ from typing import List, Optional, Tuple
 from . import (__version__, accounts, apps, binding, completion, doctor, identity, launcher, migrate, platform,
                shellpath, switch, usage)
 from .actions import CREATE, DELETE, UNCHANGED, UPDATE, Action, error, hint, info, print_action, warn
-from .config import (DEFAULT_SHARED_DIR, DEFAULT_SHARED_ITEMS, Account, Config, ConfigError, is_socks, load_config,
-                     normalize_proxy, parse_config, validate_env_key, validate_env_value, validate_name)
+from .config import (DEFAULT_SHARED_DIR, DEFAULT_SHARED_ITEMS, Account, Config, ConfigError, is_socks,
+                     is_unshareable, load_config, normalize_proxy, parse_config, unique_items, validate_env_key,
+                     validate_env_value, validate_name)
+from .config import _valid_item as valid_shared_item  # 与配置解析用同一条名称规则
 from .fsutil import KIND_DIR, KIND_MISSING, display_path, entry_kind, expand
 from .lock import LockBusyError, WriteLock
 
@@ -53,6 +55,7 @@ COMMAND_GROUPS = (
     ("Advanced", (
         ("env", "list or change an account's extra environment variables"),
         ("remove", "unregister an account (its directory is kept)"),
+        ("rename", "rename an account and its launcher (the directory stays)"),
         ("restore", "undo migrate-default: move an account back to ~/.codex"),
         ("apply", "converge all accounts to the configuration"),
         ("init", "create or update the global settings"),
@@ -127,6 +130,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_proxy.add_argument("value", help="port (e.g. 7901), URL, off or inherit")
     _add_dry_run(p_proxy)
     _add_verbose(p_proxy)
+
+    p_rename = sub.add_parser("rename", description=COMMAND_SUMMARY["rename"])
+    p_rename.add_argument("old", metavar="OLD")
+    p_rename.add_argument("new", metavar="NEW")
+    _add_dry_run(p_rename)
+    _add_verbose(p_rename)
 
     p_remove = sub.add_parser("remove", description=COMMAND_SUMMARY["remove"])
     p_remove.add_argument("name")
@@ -239,6 +248,11 @@ def _add_account_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--adopt", action="store_true",
                         help="take over existing links that already point to the shared items, "
                              "so that turning sharing off later removes them too")
+    # 按账号退出 / 恢复全局共享清单中的某些项；都可重复。退出只删本工具建的链接，与关闭共享一致。
+    parser.add_argument("--shared-exclude", action="append", metavar="ITEM",
+                        help="do not link this shared item into this account (repeatable)")
+    parser.add_argument("--shared-include", action="append", metavar="ITEM",
+                        help="undo --shared-exclude for this item (repeatable)")
     _add_dry_run(parser)
     _add_verbose(parser)
 
@@ -434,6 +448,10 @@ def dispatch(args: argparse.Namespace) -> int:
             items = [item.strip() for item in args.shared_items.split(",") if item.strip()]
             if any(item in (".", "..") or "/" in item for item in items):
                 raise UsageError("--shared-items must be plain names without '/'")
+            for item in items:
+                if is_unshareable(item):
+                    raise UsageError("--shared-items must not include {!r}: it holds account-specific "
+                                     "state".format(item))
             new.shared_items = items
     elif args.command in ("add", "set"):
         # add 对已登记的账号也是“修改选项”（保持兼容）；set 只改已登记的账号，不会新建。
@@ -460,6 +478,9 @@ def dispatch(args: argparse.Namespace) -> int:
             account.shared = True
         elif args.no_shared:
             account.shared = False
+        # 放在 --config-from 之前，plan_config_copy 才能看到排除项。注意同一条命令里排除 config.toml 并复制
+        # 仍会判冲突：计划按当前文件判断，那时 config.toml 还是链到共享内容的软链；要分两条命令。
+        _apply_shared_exclude(account, args)
         if args.adopt:
             # 接管只对开启了共享的账号有意义；关闭状态下工具本来就不管这些软链。
             if not account.shared:
@@ -475,6 +496,11 @@ def dispatch(args: argparse.Namespace) -> int:
             error(new.not_registered(args.name))
             return accounts.EXIT_ERROR
         account.proxy = _checked_proxy(args.value)
+    elif args.command == "rename":
+        prepared = _rename_config(new, args)
+        if isinstance(prepared, int):
+            return prepared
+        new, orphan_scope = prepared
     elif args.command == "remove":
         name = _checked_name(args.name)
         account = new.find(name)
@@ -537,6 +563,10 @@ def dispatch(args: argparse.Namespace) -> int:
             info("binding not changed because of the errors above")
     if args.command in ("add", "set") and code == accounts.EXIT_OK and not args.dry_run:
         _hint_shared_dir(old, new, args)
+        _hint_shared_exclude(new, args)
+    if args.command == "rename" and code == accounts.EXIT_OK and not args.dry_run:
+        info("renamed {} to {}; directory {} is unchanged".format(
+            args.old, args.new, display_path(accounts.account_dir(new, args.new))))
     # set 不新建账号，不需要“下一步登录”的提示。
     if args.command == "add" and code == accounts.EXIT_OK and not args.dry_run:
         _hint_after_setup(new, args.name, check_login=True)
@@ -545,7 +575,68 @@ def dispatch(args: argparse.Namespace) -> int:
 
 def _any_account_option(args: argparse.Namespace) -> bool:
     return (args.proxy is not None or args.shared_to is not None or args.no_shared or args.adopt
-            or bool(args.config_from))
+            or bool(args.config_from) or bool(args.shared_exclude) or bool(args.shared_include))
+
+
+def _apply_shared_exclude(account: Account, args: argparse.Namespace) -> None:
+    """--shared-include 先撤销，--shared-exclude 再追加；同一名称同时出现在两边是用法错误。
+
+    只改配置：链接的增删由收敛计划完成（shared.plan_shared 跳过被排除的项，原来的受管链接按关闭共享删除）。
+    """
+    exclude = args.shared_exclude or []
+    include = args.shared_include or []
+    for item in exclude + include:
+        if not valid_shared_item(item):
+            raise UsageError("shared item names must be plain names without '/', got {!r}".format(item))
+    both = sorted(set(exclude) & set(include))
+    if both:
+        raise UsageError("{} given to both --shared-exclude and --shared-include".format(", ".join(both)))
+    kept = [item for item in account.shared_exclude if item not in include]
+    account.shared_exclude = unique_items(kept + exclude)
+
+
+def _hint_shared_exclude(config: Config, args: argparse.Namespace) -> None:
+    """退出项暂时不起作用的两种情况：名称不在共享清单里（精确匹配，与 plan_shared 相同），或账号没开共享。"""
+    exclude = args.shared_exclude or []
+    if not exclude:
+        return
+    account = config.find(args.name)
+    for item in exclude:
+        if item not in config.shared_items:
+            info("note: {} is not in shared.items; the exclusion takes effect only if it is added there".format(
+                item))
+    if account is not None and not account.shared:
+        info("note: sharing is off for {}; the exclusion applies once it is turned on".format(account.name))
+
+
+def _rename_config(new: Config, args: argparse.Namespace):
+    """rename 的新配置：返回 (新配置, orphan_scope)，或直接返回退出码。
+
+    新账号是旧账号的完整副本（代理、共享、受管链接、环境变量、退出项、目录名），只改名字；
+    目录名保持不变，所以目录、登录与共享链接都不动。旧启动命令由收敛计划按“账号移除”删除，
+    accounts.plan 会因目录仍被新名字使用而跳过删除共享链接。
+    """
+    old_name = _checked_name(args.old)
+    new_name = _checked_name(args.new)
+    account = new.find(old_name)
+    if account is None:
+        error(new.not_registered(old_name), phase="rename")
+        return accounts.EXIT_ERROR
+    if new_name.casefold() == account.name.casefold():
+        # 大小写不敏感的文件系统上 codex-Work 与 codex-work 是同一个文件，删旧建新会互相覆盖。
+        raise UsageError("only the letter case differs; renaming that way is not supported")
+    if new.find(new_name) is not None:
+        error("account {!r} already exists".format(new.find(new_name).name), phase="rename")
+        return accounts.EXIT_CONFLICT
+    renamed = account.copy()
+    renamed.name = new_name
+    # 按原顺序重建字典，config.json 里账号的顺序不变。
+    new.accounts = {(new_name if key == account.name else key): (renamed if key == account.name else value)
+                    for key, value in new.accounts.items()}
+    for path, bound in list(new.bindings.items()):
+        if bound.casefold() == account.name.casefold():
+            new.bindings[path] = new_name
+    return new, frozenset([account.name.casefold()])
 
 
 def _not_registered_for_set(config: Config, name: str) -> str:
@@ -749,10 +840,19 @@ def _load_apply_file(path: str, old: Config) -> Config:
     except OSError as exc:
         raise ConfigError("cannot read {}: {}".format(path, exc))
     new = parse_config(raw, path)
+    # parse_config 会给省略的 dir 填默认值，要判断文件里是否显式写了，只能看原始 JSON。
+    raw_accounts = json.loads(raw).get("accounts", {})
     for account in new.accounts.values():
         _warn_if_socks(account.proxy, account.name)
         current = old.find(account.name)
         account.managed_links = list(current.managed_links) if current else []
+        if current is not None:
+            # 目录名是工具内部状态：改了已登记账号的目录名，就等于让它指向另一个目录。
+            written = raw_accounts.get(account.name, {})
+            if isinstance(written, dict) and "dir" in written and written["dir"] != current.dir_name:
+                warn("'dir' of {!r} in {} is ignored for a registered account; it keeps using {}".format(
+                    account.name, path, display_path(accounts.account_dir(old, current.name))))
+            account.dir_name = current.dir_name
     # 绑定是本机状态，沿用当前值；文件中已删除的账号，它的绑定一并删除。
     new.bindings = dict(old.bindings)
     for name in set(new.bindings.values()):
@@ -829,6 +929,7 @@ def cmd_list(as_json: bool = False, verbose: bool = False) -> int:
                 "dir_status": "ok" if is_dir else "missing-dir",
                 "proxy": account.proxy,
                 "shared": account.shared,
+                "shared_exclude": list(account.shared_exclude),
                 "launcher": accounts.launcher_status(config, name),
                 "credentials_store": found.store if found else None,
                 # 只给键名：值里可能有密钥。
@@ -856,7 +957,7 @@ def cmd_list(as_json: bool = False, verbose: bool = False) -> int:
     rows = [("NAME", "DIR", "PROXY", "SHARED", "LAUNCHER", "LOGIN", "PLAN")]
     for name, account, directory, is_dir, found in entries:
         rows.append((name, "ok" if is_dir else "missing-dir", account.proxy,
-                     "yes" if account.shared else "no", accounts.launcher_status(config, name),
+                     _shared_cell(account), accounts.launcher_status(config, name),
                      identity.display_login(found) if found else "-",
                      (found.plan if found and found.plan else "-")))
     widths = [max(len(row[index]) for row in rows) for index in range(len(rows[0]))]
@@ -899,7 +1000,7 @@ def _print_list_summary(config: Config, entries, duplicates: List[List[str]]) ->
             problems.append("not logged in")
         has_problem = has_problem or bool(problems)
         rows.append((name, identity.display_login(found) if found else "-", account.proxy,
-                     "yes" if account.shared else "no", cell, ", ".join(problems) or "ok"))
+                     _shared_cell(account), cell, ", ".join(problems) or "ok"))
     widths = [max(len(row[index]) for row in rows) for index in range(len(rows[0]))]
     for row in rows:
         print("  ".join(cell.ljust(width) for cell, width in zip(row, widths)).rstrip())
@@ -909,6 +1010,15 @@ def _print_list_summary(config: Config, entries, duplicates: List[List[str]]) ->
         print("run `multi-codex doctor` for details")
     _warn_duplicates(duplicates, entries)
     return accounts.EXIT_OK
+
+
+def _shared_cell(account: Account) -> str:
+    """SHARED 列：共享开启且有退出项时写出退出的项；没有退出项时与 0.8 相同（yes / no）。"""
+    if not account.shared:
+        return "no"
+    if account.shared_exclude:
+        return "yes (not: {})".format(", ".join(account.shared_exclude))
+    return "yes"
 
 
 def _usage_cell(result: usage.UsageResult, now: float) -> str:
@@ -1074,7 +1184,7 @@ def cmd_code(args: argparse.Namespace, extra: List[str]) -> int:
         error("VS Code's `code` command was not found{}; install it from VS Code (\"Shell Command: Install "
               "'code' command in PATH\") or pass --bin".format(" at " + args.bin if args.bin else ""))
         return accounts.EXIT_ERROR
-    data_dir = apps.gui_data_dir(config, account.name, "vscode")
+    data_dir = apps.gui_data_dir(config, account.dir_name, "vscode")
     if sys.platform == "darwin":
         if len(data_dir) > apps.SOCKET_DIR_WARN_LENGTH:
             warn("{} is long; VS Code's socket path inside it may exceed the 104-byte limit".format(data_dir))
@@ -1107,8 +1217,8 @@ def cmd_app(args: argparse.Namespace) -> int:
     if problem:
         error(problem)
         return accounts.EXIT_ERROR
-    data_dir = apps.gui_data_dir(config, account.name, "desktop")
-    log = apps.desktop_log(config, account.name)
+    data_dir = apps.gui_data_dir(config, account.dir_name, "desktop")
+    log = apps.desktop_log(config, account.dir_name)
     argv = [apps.open_command(), "-n",
             "--env", "CODEX_HOME=" + accounts.account_dir(config, account.name),
             "--env", "CODEX_ELECTRON_USER_DATA_PATH=" + data_dir,

@@ -12,6 +12,7 @@ from typing import Dict, Optional
 
 from .config import PROXY_ENV_VARS, PROXY_INHERIT, PROXY_OFF, is_socks
 from .fsutil import KIND_FILE, entry_kind, read_text
+from .platform import ISOLATION_BREAKING_ENV
 
 MARKER_PREFIX = "# managed-by: multi-codex account="
 LAUNCHER_PREFIX = "codex-"
@@ -54,7 +55,9 @@ def render(name: str, account_dir: str, proxy: str, env: Optional[Dict[str, str]
            command_mode: bool = False) -> str:
     """生成 POSIX sh 启动命令的完整内容。所有值都经 shlex.quote 转义。
 
-    env 为空时，输出必须与 0.3.0 逐字节相同，否则升级后所有启动命令都会被判为 stale。
+    0.9 起在设好 CODEX_HOME 之后清除 ISOLATION_BREAKING_ENV（feature-isolation-sharing-rename §5.1.1），
+    内容因此与 0.8 及以前不同：升级后已有启动命令都会被判为 stale，运行一次 apply 重写。
+    除此之外，内容只由参数决定；再改动模板同样会让所有启动命令变成 stale，必须在 CHANGELOG 写明。
     command_mode 供 `multi-codex run` 使用：环境设置与启动命令完全相同，只是最后执行 "$@" 而不是 codex，
     这样两者不会各算一套环境变量。
     """
@@ -72,6 +75,9 @@ def render(name: str, account_dir: str, proxy: str, env: Optional[Dict[str, str]
         "fi",
         'CODEX_HOME="$account_dir"',
         "export CODEX_HOME",
+        # shell 里的 CODEX_API_KEY 等变量会让每个账号都用同一个 API key 或同一份数据库，破坏按账号隔离。
+        # 必须放在账号 env 行之前：账号自己用 `multi-codex env` 设置的同名变量要在后面重新导出。
+        "unset " + " ".join(sorted(ISOLATION_BREAKING_ENV)),
     ]
     lines.extend(_proxy_lines(proxy))
     for key in sorted(env or {}):

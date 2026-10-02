@@ -33,6 +33,10 @@ def plan_shared(new: Config, account: Account, account_dir: str,
                            "shared.dir is not configured; run `multi-codex init --shared-dir DIR`")]
         shared_root = expand(new.shared_dir)
         for item in new.shared_items:
+            # 该账号退出的项（shared_exclude）：不建链接，也不报共享目录缺项；原来建过的受管链接
+            # 落到下面“不在 desired 中”的分支按关闭共享删除。必须在缺项判断之前跳过。
+            if item in account.shared_exclude:
+                continue
             source = os.path.join(shared_root, item)
             if entry_kind(source) == KIND_MISSING:
                 actions.append(Action(SKIP, "shared-link", os.path.join(account_dir, item),

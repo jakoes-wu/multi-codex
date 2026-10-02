@@ -32,7 +32,27 @@ NO_ORPHANS: FrozenSet[str] = frozenset()
 
 
 def account_dir(config: Config, name: str) -> str:
-    return os.path.join(expand(config.root), name)
+    """账号目录。用账号记录的目录名（rename 后与账号名不同）；未登记的名字按名字本身拼。"""
+    account = config.find(name)
+    return os.path.join(expand(config.root), account.dir_name if account is not None else name)
+
+
+def dir_conflicts(config: Config) -> List[str]:
+    """两个账号会落到同一个目录时的说明文字（规则同 config._check_dir_names）。
+
+    parse_config 只检查读入的文件；这里检查命令算出的新配置，典型是 rename work job 之后 add work。
+    """
+    problems = []
+    for account in config.accounts.values():
+        for other in config.accounts.values():
+            if other is account:
+                continue
+            if account.dir_name.casefold() == other.dir_name.casefold() or \
+                    account.name.casefold() == other.dir_name.casefold():
+                problems.append("account {!r} would use the directory of account {!r}".format(
+                    account.name, other.name))
+                break
+    return problems
 
 
 def plan(old: Config, new: Config, *, config_exists: bool = True,
@@ -60,6 +80,9 @@ def plan(old: Config, new: Config, *, config_exists: bool = True,
                               "cannot change root from {} to {} while accounts are registered".format(
                                   old_root, new_root)))
 
+    for problem in dir_conflicts(new):
+        actions.append(Action(CONFLICT, "config", config_path(), problem))
+
     planned_deletes: Set[str] = set()
     for account in new.accounts.values():
         old_account = old.find(account.name)
@@ -70,7 +93,7 @@ def plan(old: Config, new: Config, *, config_exists: bool = True,
                                   "account {!r} is registered as {!r}; renaming is not supported".format(
                                       account.name, old_account.name)))
             continue
-        directory = os.path.join(new_root, account.name)
+        directory = os.path.join(new_root, account.dir_name)
         actions.extend(_plan_account_dir(directory, assumed))
         actions.extend(_plan_launcher(new_bin, account.name, directory, account.proxy, account.env))
         if old_account is not None and old_bin != new_bin:
@@ -79,11 +102,15 @@ def plan(old: Config, new: Config, *, config_exists: bool = True,
         actions.extend(shared.plan_shared(new, account, directory, old.shared_dir,
                                           adopt=account.name.casefold() in adopt_accounts))
 
+    new_dirs = {account.dir_name.casefold() for account in new.accounts.values()}
     for old_account in old.accounts.values():
         if new.find(old_account.name) is None:
             actions.extend(_plan_launcher_delete(old_bin, old_account.name, planned_deletes,
                                                  "account removed"))
-            actions.extend(shared.plan_remove_links(old_account, os.path.join(old_root, old_account.name),
+            # rename：旧名字从配置里消失，但目录由新名字接着用，共享链接必须留着。
+            if old_account.dir_name.casefold() in new_dirs:
+                continue
+            actions.extend(shared.plan_remove_links(old_account, os.path.join(old_root, old_account.dir_name),
                                                     old.shared_dir))
 
     if orphan_scope:
@@ -121,7 +148,7 @@ def plan_config_copy(config: Config, account: Account, content: str, source_name
     已有不同内容时不覆盖：那可能是用户已经改过的配置。
     """
     target = os.path.join(account_dir(config, account.name), "config.toml")
-    if account.shared and "config.toml" in config.shared_items:
+    if account.shared and "config.toml" in config.shared_items and "config.toml" not in account.shared_exclude:
         return [Action(CONFLICT, "config-file", target,
                        "config.toml is shared for this account and does not need copying")]
     kind = entry_kind(target)
