@@ -32,9 +32,32 @@ codex            -> ~/.codex，它本身也可以迁移成其中一个账号
 
 启动命令是普通的 shell 脚本，即使卸载了 multi-codex 也照常可用。
 
-## 安装
+## 前置条件
 
-需要 macOS 或 Linux（Windows 支持在计划中；WSL 内按 Linux 使用）、Python 3.8 及以上（不需要额外的包）、`tar`、`curl` 或 `wget`，并且 `PATH` 中能找到 Codex CLI。
+**服务器要求**：不需要服务器。multi-codex 只在你自己的电脑上运行，没有任何需要部署的服务端。电脑需要能访问 OpenAI（登录和使用 Codex）和 GitHub（下载安装脚本与发布包）；不能直接访问时，可以给每个账号配置代理，见“代理取值”一节。
+
+**电脑需要的工具**：
+
+- macOS 或 Linux。Windows 支持在计划中；WSL 内按 Linux 使用。
+- Python 3.8 及以上。只用标准库，不需要 `pip install` 任何包。
+- `tar`，以及 `curl` 或 `wget`。
+- `PATH` 中能找到 Codex CLI，即 `codex --version` 能运行。通过 npm 安装的 Codex 需要 Node.js 16 及以上。
+
+**一键安装**：
+
+```sh
+# macOS（Homebrew）
+xcode-select --install          # 提供 python3；curl 和 tar 是 macOS 自带的
+brew install --cask codex       # Codex CLI
+
+# Debian / Ubuntu / WSL
+sudo apt update && sudo apt install -y python3 curl tar
+npm install -g @openai/codex    # Codex CLI；需要 Node.js 16 及以上
+```
+
+Debian、Ubuntu 上请先看 `node --version`：apt 装的 `nodejs` 可能低于 16（Ubuntu 22.04 是 12.22，24.04 是 18）。版本太低时，用 nvm 或 NodeSource 等方式安装新版 Node.js。Ubuntu 20.04 自带的就是 Python 3.8。
+
+## 安装
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/jakoes-wu/multi-codex/main/install.sh | sh
