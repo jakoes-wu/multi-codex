@@ -32,9 +32,32 @@ codex            -> ~/.codex, which can itself become one of the accounts
 
 The launchers are plain shell scripts. They keep working even if you uninstall multi-codex.
 
-## Install
+## Prerequisites
 
-You need macOS or Linux (Windows support is planned; inside WSL, use the Linux instructions), Python 3.8 or newer (no extra packages), `tar`, `curl` or `wget`, and the Codex CLI on your `PATH`.
+**Server**: none. multi-codex runs only on your own computer; there is nothing to deploy. The computer needs access to OpenAI (to log in and use Codex) and to GitHub (to download the installer and releases). If it cannot reach them directly, give each account a proxy (see [Proxy values](#proxy-values)).
+
+**Your computer**:
+
+- macOS or Linux. Windows support is planned; inside WSL, follow the Linux instructions.
+- Python 3.8 or newer. Only the standard library is used; no `pip install` is needed.
+- `tar`, and `curl` or `wget`.
+- The Codex CLI on your `PATH`: `codex --version` should work. The npm package needs Node.js 16 or newer.
+
+**Install them in one go**:
+
+```sh
+# macOS (Homebrew)
+xcode-select --install          # provides python3; curl and tar ship with macOS
+brew install --cask codex       # Codex CLI
+
+# Debian / Ubuntu / WSL
+sudo apt update && sudo apt install -y python3 curl tar
+npm install -g @openai/codex    # Codex CLI; needs Node.js 16 or newer
+```
+
+On Debian or Ubuntu, check `node --version` first: the `nodejs` package from apt can be older than 16 (Ubuntu 22.04 ships 12.22; 24.04 ships 18). If it is too old, install a current Node.js, for example with nvm or NodeSource. Ubuntu 20.04 already has Python 3.8.
+
+## Install
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/jakoes-wu/multi-codex/main/install.sh | sh
