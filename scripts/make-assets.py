@@ -4,7 +4,7 @@
 前置条件：
   - 在 macOS 上运行：字体固定用 /System/Library/Fonts/Menlo.ttc 与 Helvetica.ttc，找不到就报错退出，
     不回落到其它字体——换字体会让图片尺寸和排版悄悄变化。
-  - Python 3.8+，已安装 Pillow（pip install Pillow）；不需要网络。
+  - Python 3.8+，已安装 Pillow 8.2 或更新（pip install Pillow；用到 rounded_rectangle 与 getlength）；不需要网络。
   - 从仓库任意目录运行均可：用本仓库 src/ 下的 multi-codex，输出默认写到仓库的 docs/assets/。
 
 做法：在临时目录里建 HOME、假 codex 和示例账号的假 auth.json（work@example.com、me@example.com），

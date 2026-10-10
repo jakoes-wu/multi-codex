@@ -10,7 +10,8 @@ from helpers import SRC, CliTestCase
 from test_insight import rate_limits, token_count_line
 
 sys.path.insert(0, SRC)
-from multi_codex import cli  # noqa: E402
+from multi_codex import cli, usage  # noqa: E402
+from unittest import mock  # noqa: E402
 
 HOUR = 3600
 MINUTE = 60
@@ -31,6 +32,22 @@ class AgeCellTest(unittest.TestCase):
     def test_iso(self):
         self.assertEqual(cli._iso_utc(0.9), "1970-01-01T00:00:00Z")  # 秒向下截断
         self.assertIsNone(cli._iso_utc(None))
+
+
+class CandidateRaceTest(unittest.TestCase):
+    """枚举之后最新的会话文件被删：退到下一个还能 stat 的文件（PR #30 评审意见）。"""
+
+    def test_falls_back_to_next_candidate(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            older = os.path.join(tmp, "older.jsonl")
+            with open(older, "w") as handle:
+                handle.write("x\n")
+            stamp = time.time() - 3 * HOUR
+            os.utime(older, (stamp, stamp))
+            gone = os.path.join(tmp, "gone.jsonl")
+            with mock.patch.object(usage, "_candidate_files", return_value=[gone, older]):
+                self.assertAlmostEqual(usage.last_used(tmp), stamp, places=3)
 
 
 class LastUsedTest(CliTestCase):

@@ -80,12 +80,12 @@
 def last_used(account_dir: str) -> Optional[float]:
     """账号最近一次使用的时间（epoch 秒）：最新会话文件与 history.jsonl 的最大 mtime；都没有时为 None。"""
     times = []
-    files = _candidate_files(account_dir)          # 已按 mtime 从新到旧排序
-    if files:
+    for path in _candidate_files(account_dir):     # 已按 mtime 从新到旧排序
         try:
-            times.append(os.stat(files[0]).st_mtime)
+            times.append(os.stat(path).st_mtime)    # 取第一个还能 stat 的
+            break
         except OSError:
-            pass                                   # 枚举之后文件被删，不算
+            continue                               # 枚举之后被删，退到下一个（PR #30 评审意见）
     history = os.path.join(account_dir, "history.jsonl")
     if not os.path.islink(history):                # 共享的 history 反映的是任意账号的使用
         try:

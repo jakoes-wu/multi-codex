@@ -208,12 +208,13 @@ def last_used(account_dir: str) -> Optional[float]:
     由调用方按 sessions 是否为软链加标记（与额度快照的 sessions_shared 判定相同）。
     """
     times = []
-    files = _candidate_files(account_dir)  # 已按 mtime 从新到旧排序
-    if files:
+    # 已按 mtime 从新到旧排序：取第一个还能 stat 的。枚举之后最新的文件被删时，退到下一个，而不是直接放弃。
+    for path in _candidate_files(account_dir):
         try:
-            times.append(os.stat(files[0]).st_mtime)
+            times.append(os.stat(path).st_mtime)
+            break
         except OSError:
-            pass  # 枚举之后文件被删，不算
+            continue
     history = os.path.join(account_dir, "history.jsonl")
     if not os.path.islink(history):
         try:
