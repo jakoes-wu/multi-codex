@@ -110,7 +110,7 @@ codex-personal resume
 ### 4. 检查是否一切正常
 
 ```sh
-multi-codex list      # 谁登录在哪个账号、代理、共享、额度，以及需要处理的问题
+multi-codex list      # 谁登录在哪个账号、代理、共享、额度、最近使用时间，以及需要处理的问题
 multi-codex usage     # 5 小时和每周额度用量；账号用过之后才有数据，--live 可立即查询
 multi-codex doctor    # 找出问题，并给出修复每个问题的命令
 ```
@@ -166,7 +166,7 @@ multi-codex migrate-default
 | `multi-codex proxy 名称 端口\|URL\|off\|inherit` | 设置账号的代理 |
 | `multi-codex remove 名称` | 注销账号，删除它的启动命令。**账号目录会保留** |
 | `multi-codex apply [-f 文件]` | 按配置（或指定文件）收敛全部账号 |
-| `multi-codex list [-v] [--json]` | 列出账号：登录身份、代理、共享、额度和状态；`-v` 输出完整表格 |
+| `multi-codex list [-v] [--json]` | 列出账号：登录身份、代理、共享、额度、最近使用时间和状态；`-v` 输出完整表格 |
 | `multi-codex usage [名称 ...] [--live] [--timeout 秒] [--json]` | 显示额度用量 |
 | `multi-codex doctor [--json]` | 检查安装、配置和各账号，只读 |
 | `multi-codex run [名称] [-- 命令 ...]` | 在账号的环境下运行命令（默认运行 `codex`）；省略名称时，使用当前目录绑定的账号 |
@@ -188,9 +188,9 @@ multi-codex migrate-default
 
 ```text
 default: work
-NAME  LOGIN          PROXY                  SHARED  USAGE           STATUS
-work  w@example.com  http://127.0.0.1:7901  yes     5h 23%, 7d 41%  ok
-home  -              inherit                no      -               not logged in
+NAME  LOGIN          PROXY                  SHARED  USAGE           LAST USED  STATUS
+work  w@example.com  http://127.0.0.1:7901  yes     5h 23%, 7d 41%  12m ago    ok
+home  -              inherit                no      -               3d ago     not logged in
 run `multi-codex doctor` for details
 ```
 
@@ -201,7 +201,7 @@ LOGIN 读自各账号本地的 `auth.json`，不会输出任何令牌，也不�
 - `keyring`：凭据存在系统钥匙串里，无法从文件读取；
 - `unreadable`：凭据文件读不了。
 
-USAGE 是账号本地会话记录里最近一次的额度快照，与 `multi-codex usage` 读的是同一份数据：`reset` 表示快照之后窗口已经重置；末尾的 `*` 表示 `sessions` 与其它账号共享，额度可能属于别的账号。STATUS 列出需要处理的问题（`missing-dir`、`launcher missing`/`stale`/`conflict`、`not logged in`），`doctor` 会逐条说明。两个账号登录的是同一个 ChatGPT 用户和工作区时，`list` 会给出警告，因为它们共用一份额度。
+USAGE 是账号本地会话记录里最近一次的额度快照，与 `multi-codex usage` 读的是同一份数据：`reset` 表示快照之后窗口已经重置；末尾的 `*` 表示 `sessions` 与其它账号共享，额度可能属于别的账号。LAST USED 是账号最近一次使用的时间，取账号目录里会话文件（`sessions/`、`archived_sessions/`）与 `history.jsonl` 中最新的修改时间，只看文件时间、不读内容；`history.jsonl` 是软链（与其它账号共享）时不计入，末尾的 `*` 同样表示 `sessions` 是共享的。`list --json` 里对应 `last_used` 字段（UTC 时间或 `null`）。STATUS 列出需要处理的问题（`missing-dir`、`launcher missing`/`stale`/`conflict`、`not logged in`），`doctor` 会逐条说明。两个账号登录的是同一个 ChatGPT 用户和工作区时，`list` 会给出警告，因为它们共用一份额度。
 
 `list -v` 输出以前版本的完整表格：账号根目录、启动命令目录、共享目录，以及 DIR、LAUNCHER、PLAN 列。PLAN 是当前令牌签发时的套餐，Codex 下次刷新令牌后才会更新。
 

@@ -6,6 +6,15 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- `list` shows when each account was last used (LAST USED, e.g. `12m ago`,
+  `3h ago`, `2d ago`): the newest modification time of its session files and
+  `history.jsonl`; only file times are read. A `history.jsonl` that is a link
+  (shared with other accounts) is not counted, and `*` marks a shared
+  `sessions`. `list --json` has a `last_used` field (UTC, or `null`). `list -v`
+  is unchanged.
+
 ## [0.10.0] - 2026-10-02
 
 ### Added

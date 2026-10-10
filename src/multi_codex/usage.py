@@ -200,6 +200,29 @@ def local_snapshot(name: str, account_dir: str) -> UsageResult:
     return UsageResult(name, SOURCE_LOCAL, True, None, None, shared, [])
 
 
+def last_used(account_dir: str) -> Optional[float]:
+    """账号最近一次使用的时间（epoch 秒）：最新会话文件与 history.jsonl 的最大 mtime；都没有时为 None。
+
+    只 stat、不读内容（feature-last-used §5.1.1）。history.jsonl 是软链时不计入：它可能被多个账号共享，
+    软链目标的 mtime 反映的是任意一个账号的使用。sessions 是软链时会话文件同样可能来自别的账号，
+    由调用方按 sessions 是否为软链加标记（与额度快照的 sessions_shared 判定相同）。
+    """
+    times = []
+    files = _candidate_files(account_dir)  # 已按 mtime 从新到旧排序
+    if files:
+        try:
+            times.append(os.stat(files[0]).st_mtime)
+        except OSError:
+            pass  # 枚举之后文件被删，不算
+    history = os.path.join(account_dir, "history.jsonl")
+    if not os.path.islink(history):
+        try:
+            times.append(os.stat(history).st_mtime)
+        except OSError:
+            pass
+    return max(times) if times else None
+
+
 # ---- 实时额度 ----
 
 class _AppServer(object):

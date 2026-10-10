@@ -234,7 +234,7 @@ class ListSummaryTest(EverydayBase):
         os.unlink(os.path.join(self.bin, "codex-nolauncher"))
         result = self.ok("list")
         header, rows = self.rows(result.out)
-        self.assertEqual(header, ["NAME", "LOGIN", "PROXY", "SHARED", "USAGE", "STATUS"])
+        self.assertEqual(header, ["NAME", "LOGIN", "PROXY", "SHARED", "USAGE", "LAST", "USED", "STATUS"])
         self.assertTrue(result.out.startswith("default: "))
         by_name = {row.split()[0]: row for row in rows if row and not row.startswith("run ")}
         self.assertTrue(by_name["good"].endswith(" ok"))

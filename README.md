@@ -110,7 +110,7 @@ codex-personal resume
 ### 4. Check that everything is right
 
 ```sh
-multi-codex list      # who is logged in, proxy, sharing, usage and anything that needs fixing
+multi-codex list      # who is logged in, proxy, sharing, usage, when last used and anything that needs fixing
 multi-codex usage     # 5-hour and weekly usage; empty until you have used an account (--live asks right away)
 multi-codex doctor    # finds problems and prints the command that fixes each one
 ```
@@ -166,7 +166,7 @@ More questions are answered in the [FAQ](#faq).
 | `multi-codex proxy NAME PORT\|URL\|off\|inherit` | Set an account's proxy. |
 | `multi-codex remove NAME` | Unregister an account and delete its launcher. **The account directory is kept.** |
 | `multi-codex apply [-f FILE]` | Converge everything to the configuration (or to `FILE`). |
-| `multi-codex list [-v] [--json]` | Show accounts: who is logged in, proxy, sharing, usage and status. `-v` shows the full table. |
+| `multi-codex list [-v] [--json]` | Show accounts: who is logged in, proxy, sharing, usage, when last used and status. `-v` shows the full table. |
 | `multi-codex usage [NAME ...] [--live] [--timeout SEC] [--json]` | Show rate-limit usage. |
 | `multi-codex doctor [--json]` | Check the installation, configuration and accounts. Read-only. |
 | `multi-codex run [NAME] [-- COMMAND ...]` | Run a command (default: `codex`) with an account's environment. Without NAME, the account bound to the current directory is used. |
@@ -188,13 +188,13 @@ Every write command accepts `--dry-run`. `init`, `add`, `set`, `rename`, `proxy`
 
 ```text
 default: work
-NAME  LOGIN          PROXY                  SHARED  USAGE           STATUS
-work  w@example.com  http://127.0.0.1:7901  yes     5h 23%, 7d 41%  ok
-home  -              inherit                no      -               not logged in
+NAME  LOGIN          PROXY                  SHARED  USAGE           LAST USED  STATUS
+work  w@example.com  http://127.0.0.1:7901  yes     5h 23%, 7d 41%  12m ago    ok
+home  -              inherit                no      -               3d ago     not logged in
 run `multi-codex doctor` for details
 ```
 
-LOGIN is read from each account's local `auth.json`: the e-mail address, `api-key`, `-` (not logged in), `keyring` (credentials are in the system keyring and cannot be read from files) or `unreadable`. No token is ever printed, and nothing is sent anywhere. USAGE is the last usage snapshot in the account's local session logs, the same data as `multi-codex usage` (`reset` means the window has reset since; `*` means `sessions` is shared with other accounts, so the numbers may belong to another one). STATUS lists what needs fixing (`missing-dir`, `launcher missing`/`stale`/`conflict`, `not logged in`); `doctor` explains each problem. If two accounts are logged in as the same ChatGPT user and workspace, `list` warns you: they share one quota.
+LOGIN is read from each account's local `auth.json`: the e-mail address, `api-key`, `-` (not logged in), `keyring` (credentials are in the system keyring and cannot be read from files) or `unreadable`. No token is ever printed, and nothing is sent anywhere. USAGE is the last usage snapshot in the account's local session logs, the same data as `multi-codex usage` (`reset` means the window has reset since; `*` means `sessions` is shared with other accounts, so the numbers may belong to another one). LAST USED is when the account was last used: the newest modification time of its session files (`sessions/`, `archived_sessions/`) and its `history.jsonl`; only file times are read, not the contents. A `history.jsonl` that is a link (shared with other accounts) is not counted, and `*` again means `sessions` is shared. `list --json` gives it as `last_used` (UTC, or `null`). STATUS lists what needs fixing (`missing-dir`, `launcher missing`/`stale`/`conflict`, `not logged in`); `doctor` explains each problem. If two accounts are logged in as the same ChatGPT user and workspace, `list` warns you: they share one quota.
 
 `list -v` prints the full table of earlier versions: the root, launcher and shared directories, and the DIR, LAUNCHER and PLAN columns. PLAN is the plan recorded when the current token was issued; it is updated the next time Codex refreshes the token.
 
