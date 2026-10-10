@@ -1,6 +1,6 @@
 # multi-codex v0.11：`list` 显示账号最近使用时间（LAST USED）
 
-> 2026-10-09 注记：方案已定（plan-review 两轮收敛：第 1 轮 0 高 2 中 9 低，第 2 轮 0 高 0 中 2 低，均已修订），代码待落地。基线：main `e4f0b64`（v0.10.0 之后只合并了文档改动）。
+> 2026-10-09 注记：已落地（PR #30，main `89dc9a6`），随 v0.11.0 发布。plan-review 两轮收敛（第 1 轮 0 高 2 中 9 低，第 2 轮 0 高 0 中 2 低）。实现位置：`src/multi_codex/usage.py` 的 `last_used`；`src/multi_codex/cli.py` 的 `_print_list_summary`、`_age_cell`、`_iso_utc` 与 `cmd_list` JSON；`scripts/make-assets.py` 的 `fit_mono`。测试：`tests/test_last_used.py`。PR 评审补充：最新候选文件枚举后被删时退到下一个。基线：main `e4f0b64`（v0.10.0 之后只合并了文档改动）。
 >
 > 用户的决定（2026-10-09）：
 >
