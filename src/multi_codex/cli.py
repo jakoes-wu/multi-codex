@@ -936,6 +936,7 @@ def cmd_list(as_json: bool = False, verbose: bool = False) -> int:
                 "proxy": account.proxy,
                 "shared": account.shared,
                 "shared_exclude": list(account.shared_exclude),
+                "last_used": _iso_utc(usage.last_used(directory)) if is_dir else None,
                 "launcher": accounts.launcher_status(config, name),
                 "credentials_store": found.store if found else None,
                 # 只给键名：值里可能有密钥。
@@ -984,21 +985,29 @@ def _print_list_summary(config: Config, entries, duplicates: List[List[str]]) ->
         print("no accounts registered")
         return accounts.EXIT_OK
     now = time.time()
-    rows = [("NAME", "LOGIN", "PROXY", "SHARED", "USAGE", "STATUS")]
+    rows = [("NAME", "LOGIN", "PROXY", "SHARED", "USAGE", "LAST USED", "STATUS")]
     has_problem = False
     has_shared_sessions = False
     for name, account, directory, is_dir, found in entries:
         problems = []
         cell = "-"
+        used_cell = "-"
         if not is_dir:
             # 目录都不在了，登录状态没有意义，只报这一条。
             problems.append("missing-dir")
         else:
             result = usage.local_snapshot(name, directory)
             cell = _usage_cell(result, now)
-            if result.sessions_shared and cell != "-":
-                cell += "*"
-                has_shared_sessions = True
+            used_cell = _age_cell(usage.last_used(directory), now)
+            # sessions 是软链时，额度与最近使用时间都可能来自别的账号：两列各自加 *，任一加了就输出脚注。
+            # 只要 sessions 是软链就加，不论 LAST USED 的最大值来自会话文件还是本账号自己的 history.jsonl。
+            if result.sessions_shared:
+                if cell != "-":
+                    cell += "*"
+                    has_shared_sessions = True
+                if used_cell != "-":
+                    used_cell += "*"
+                    has_shared_sessions = True
         launcher_state = accounts.launcher_status(config, name)
         if launcher_state != "ok":
             problems.append("launcher {}".format(launcher_state))
@@ -1006,12 +1015,12 @@ def _print_list_summary(config: Config, entries, duplicates: List[List[str]]) ->
             problems.append("not logged in")
         has_problem = has_problem or bool(problems)
         rows.append((name, identity.display_login(found) if found else "-", account.proxy,
-                     _shared_cell(account), cell, ", ".join(problems) or "ok"))
+                     _shared_cell(account), cell, used_cell, ", ".join(problems) or "ok"))
     widths = [max(len(row[index]) for row in rows) for index in range(len(rows[0]))]
     for row in rows:
         print("  ".join(cell.ljust(width) for cell, width in zip(row, widths)).rstrip())
     if has_shared_sessions:
-        print("* sessions is shared with other accounts; usage may belong to another account")
+        print("* sessions is shared with other accounts; usage and last used may belong to another account")
     if has_problem:
         print("run `multi-codex doctor` for details")
     _warn_duplicates(duplicates, entries)
@@ -1025,6 +1034,28 @@ def _shared_cell(account: Account) -> str:
     if account.shared_exclude:
         return "yes (not: {})".format(", ".join(account.shared_exclude))
     return "yes"
+
+
+def _age_cell(epoch: Optional[float], now: float) -> str:
+    """LAST USED 列：与 multi-claude 的 list 相同的粗粒度相对时间（Nm / Nh / Nd ago），简表要窄。
+
+    不满 48 小时按小时显示，之后按天，都向下取整；mtime 晚于现在（时钟回拨、跨机复制）按 0 分钟显示。
+    """
+    if epoch is None:
+        return "-"
+    minutes = max(0, int((now - epoch) // 60))
+    if minutes < 60:
+        return "{}m ago".format(minutes)
+    if minutes < 48 * 60:
+        return "{}h ago".format(minutes // 60)
+    return "{}d ago".format(minutes // (24 * 60))
+
+
+def _iso_utc(epoch: Optional[float]) -> Optional[str]:
+    """list --json 的时间格式：UTC、秒向下截断，与 usage.to_json 的 snapshot_time 写法一致。"""
+    if epoch is None:
+        return None
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(epoch))
 
 
 def _usage_cell(result: usage.UsageResult, now: float) -> str:

@@ -4,7 +4,7 @@
 前置条件：
   - 在 macOS 上运行：字体固定用 /System/Library/Fonts/Menlo.ttc 与 Helvetica.ttc，找不到就报错退出，
     不回落到其它字体——换字体会让图片尺寸和排版悄悄变化。
-  - Python 3.8+，已安装 Pillow（pip install Pillow）；不需要网络。
+  - Python 3.8+，已安装 Pillow 8.2 或更新（pip install Pillow；用到 rounded_rectangle 与 getlength）；不需要网络。
   - 从仓库任意目录运行均可：用本仓库 src/ 下的 multi-codex，输出默认写到仓库的 docs/assets/。
 
 做法：在临时目录里建 HOME、假 codex 和示例账号的假 auth.json（work@example.com、me@example.com），
@@ -154,6 +154,22 @@ def make_gif(session, out_path, mono):
                            loop=0, optimize=True, disposal=1)
 
 
+def fit_mono(mono, lines, max_width):
+    """表格最长一行放不进边框时逐号调小等宽字号（左右各留 48 像素，max_width 已扣除）。
+
+    list 简表加列后（如 0.11 的 LAST USED），21 号字会画到边框外；减到 14 号仍放不下就报错退出，
+    不生成越界的图——缩略图里字太小同样看不清，那时应该改版式而不是继续缩字。
+    """
+    from PIL import ImageFont
+    size = mono.size
+    while size >= 14:
+        font = ImageFont.truetype(MONO_FONT, size)
+        if max(font.getlength(line) for line in lines) <= max_width:
+            return font
+        size -= 1
+    sys.exit("the list table does not fit in the social preview even at 14 pt; change the layout")
+
+
 def make_social(session, out_path, mono, title_font, tagline_font):
     """社交预览图：链接被分享到 X、Reddit、Slack 时显示的缩略图。只放表头和账号行，字号要大到缩略图里也看得清。"""
     from PIL import Image, ImageDraw
@@ -166,6 +182,7 @@ def make_social(session, out_path, mono, title_font, tagline_font):
     draw.rounded_rectangle(box, radius=14, fill=(24, 24, 37), outline=TITLE_BAR, width=2)
     list_output = next(output for command, output in session if command == "multi-codex list")
     table = [line for line in list_output if line.startswith(("NAME", "work", "personal"))]
+    mono = fit_mono(mono, table, box[2] - box[0] - 96)
     y = box[1] + 32
     draw.text((box[0] + 32, y), "$", font=mono, fill=PROMPT)
     draw.text((box[0] + 58, y), "multi-codex list", font=mono, fill=FG)
