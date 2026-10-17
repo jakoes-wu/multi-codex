@@ -84,11 +84,13 @@ class IdentityTest(InsightBase):
         self.write_auth("work", chatgpt_claims("w@example.com", "plus"))
         result = self.ok("list", "--verbose")
         header, row = [line for line in result.out.splitlines() if line.startswith(("NAME", "work"))]
-        self.assertEqual(header.split(), ["NAME", "DIR", "PROXY", "SHARED", "LAUNCHER", "LOGIN", "PLAN"])
-        self.assertEqual(row.split()[5:], ["w@example.com", "plus"])
+        self.assertEqual(header.split(), ["NAME", "DIR", "PROXY", "SHARED", "LAUNCHER", "LOGIN", "PLAN",
+                                          "BILLING", "UNTIL", "CHECKED"])
+        self.assertEqual(row.split()[5:7], ["w@example.com", "plus"])
         self.assert_no_secret(result)
         data, result = self.list_json()
-        self.assertEqual(data["accounts"][0]["login"], {"type": "chatgpt", "email": "w@example.com", "plan": "plus"})
+        self.assertEqual(data["accounts"][0]["login"], {"type": "chatgpt", "email": "w@example.com", "plan": "plus",
+                                                       "subscription": None})
         self.assert_no_secret(result)
 
     def test_profile_email_fallback(self):
@@ -109,7 +111,7 @@ class IdentityTest(InsightBase):
         types = {account["name"]: account["login"]["type"] for account in data["accounts"]}
         self.assertEqual(types, {"key": "apikey", "none": "logged-out", "ring": "keyring", "bad": "unreadable"})
         result = self.ok("list", "--verbose")
-        rows = {line.split()[0]: line.split()[5:] for line in result.out.splitlines()[4:]}
+        rows = {line.split()[0]: line.split()[5:7] for line in result.out.splitlines()[4:]}
         self.assertEqual(rows["key"], ["api-key", "-"])
         self.assertEqual(rows["none"], ["-", "-"])
         self.assertEqual(rows["ring"], ["keyring", "-"])
