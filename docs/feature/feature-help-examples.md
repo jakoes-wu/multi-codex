@@ -1,6 +1,6 @@
 # 帮助文本加使用示例（顶层 + 每个子命令）
 
-> 2026-10-17 注记：已落地，待合并。plan-review 两轮收敛（第 1 轮 0 高 2 中 4 低，第 2 轮 0 高 0 中 1 低）；code-reviewer 两轮，第 2 轮“可合并”（第 1 轮中级问题：示例校验没关缩写匹配，选项改名后旧名仍按前缀通过，已改为 `allow_abbrev = False`）。实现位置：`src/multi_codex/cli.py` 的 `TOP_EXAMPLES`（:69）、`COMMAND_EXAMPLES`（:79）、`_examples_text`（:195）、`HELP_EXAMPLES`（:203）、`build_parser` 末尾挂示例的循环（:367）。测试：`tests/test_onboarding.py` 的 `HelpTest.subcommand_parsers`（:110）、`test_every_command_has_examples`（:131）、`test_examples_parse_and_fit`（:145）。验证：本机 Python 3.11 全量通过；编译机 Python 3.8.10 全量 364 个用例通过（跳过 11 个）。基线：main `1c7edbf`（v0.12.0；方案正文里的行号按 `96154b0` 写，两者之间只改了版本号与 CHANGELOG）。
+> 2026-10-17 注记：已落地（PR #34，main `4db3440`），随 v0.12.1 发布。plan-review 两轮收敛（第 1 轮 0 高 2 中 4 低，第 2 轮 0 高 0 中 1 低）；code-reviewer 两轮，第 2 轮“可合并”（第 1 轮中级问题：示例校验没关缩写匹配，选项改名后旧名仍按前缀通过，已改为 `allow_abbrev = False`）。实现位置：`src/multi_codex/cli.py` 的 `TOP_EXAMPLES`（:69）、`COMMAND_EXAMPLES`（:79）、`_examples_text`（:195）、`HELP_EXAMPLES`（:203）、`build_parser` 末尾挂示例的循环（:367）。测试：`tests/test_onboarding.py` 的 `HelpTest.subcommand_parsers`（:110）、`test_every_command_has_examples`（:131）、`test_examples_parse_and_fit`（:145）。验证：本机 Python 3.11 全量通过；编译机 Python 3.8.10 全量 364 个用例通过（跳过 11 个）。基线：main `1c7edbf`（v0.12.0；方案正文里的行号按 `96154b0` 写，两者之间只改了版本号与 CHANGELOG）。
 
 ## 1. 背景
 
