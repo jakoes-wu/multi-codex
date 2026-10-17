@@ -1,6 +1,6 @@
 # multi-codex：`list -v` 与 `list --json` 显示订阅账期（BILLING UNTIL）
 
-> 2026-10-16 注记：已落地，待发版。基线：main `b1579d0`（v0.11.0）。plan-review 两轮收敛（第 1 轮 0 高 1 中 6 低，第 2 轮 0 高 0 中 0 低）；code-reviewer 两轮，第 2 轮“可合并”（第 1 轮的中级问题：T7 漏测 keyring，已补）。实现位置：`src/multi_codex/identity.py` 的 `Identity`（:61-62）、`_parse_iso`（:120）、`read_identity`（:173-175）；`src/multi_codex/cli.py` 的 `cmd_list` JSON（:948）与 `list -v` 表格（:966-982）、`_billing_cells`（:1070）、`_subscription_json`（:1092）。测试：`tests/test_billing.py`。验证：本机 Python 3.11 全量通过；编译机 Python 3.8.10 全量 362 个用例通过（跳过 11 个）；T13 本机实测 gmail 行为 `2026-09-20?` / `2026-08-20`，JSON 为 `2026-09-21T02:36:15Z`。
+> 2026-10-16 注记：已落地（PR #32，main `96154b0`），随 v0.12.0 发布。基线：main `b1579d0`（v0.11.0）。plan-review 两轮收敛（第 1 轮 0 高 1 中 6 低，第 2 轮 0 高 0 中 0 低）；code-reviewer 两轮，第 2 轮“可合并”（第 1 轮的中级问题：T7 漏测 keyring，已补）。实现位置：`src/multi_codex/identity.py` 的 `Identity`（:61-62）、`_parse_iso`（:120）、`read_identity`（:173-175）；`src/multi_codex/cli.py` 的 `cmd_list` JSON（:948）与 `list -v` 表格（:966-982）、`_billing_cells`（:1070）、`_subscription_json`（:1092）。测试：`tests/test_billing.py`。验证：本机 Python 3.11 全量通过；编译机 Python 3.8.10 全量 362 个用例通过（跳过 11 个）；T13 本机实测 gmail 行为 `2026-09-20?` / `2026-08-20`，JSON 为 `2026-09-21T02:36:15Z`。
 >
 > 用户的决定（2026-10-16）：
 >

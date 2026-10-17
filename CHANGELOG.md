@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-10-16
+
 ### Added
 
 - `list -v` shows BILLING UNTIL and CHECKED: the end of the current billing
@@ -241,7 +243,8 @@ First release (macOS and Linux).
 - Optional shared resources linked from one directory into selected accounts.
 - `install.sh` with `--config`, `--prefix` and `--uninstall`.
 
-[Unreleased]: https://github.com/jakoes-wu/multi-codex/compare/v0.11.0...HEAD
+[Unreleased]: https://github.com/jakoes-wu/multi-codex/compare/v0.12.0...HEAD
+[0.12.0]: https://github.com/jakoes-wu/multi-codex/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/jakoes-wu/multi-codex/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/jakoes-wu/multi-codex/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/jakoes-wu/multi-codex/compare/v0.8.0...v0.9.0
