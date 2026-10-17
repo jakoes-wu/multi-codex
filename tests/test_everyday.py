@@ -295,8 +295,8 @@ class ListSummaryTest(EverydayBase):
             "bin_dir: ~/.local/bin\n"
             "shared.dir: (not set)\n"
             "default: (none)\n"
-            "NAME  DIR  PROXY                  SHARED  LAUNCHER  LOGIN  PLAN\n"
-            "work  ok   http://127.0.0.1:7901  no      ok        -      -\n")
+            "NAME  DIR  PROXY                  SHARED  LAUNCHER  LOGIN  PLAN  BILLING UNTIL  CHECKED\n"
+            "work  ok   http://127.0.0.1:7901  no      ok        -      -     -              -\n")
         self.assertEqual(out, expected)
 
     def test_no_accounts(self):

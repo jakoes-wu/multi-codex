@@ -6,6 +6,15 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- `list -v` shows BILLING UNTIL and CHECKED: the end of the current billing
+  period and when OpenAI last checked the subscription, as recorded in the
+  login token. The dates are often stale, so this is not an expiry date; `?`
+  marks a period end that has passed. The table shows `-` for the `free` plan.
+  `list --json` adds `login.subscription` with `active_until` and
+  `last_checked` (UTC, for every plan).
+
 ## [0.11.0] - 2026-10-09
 
 ### Added

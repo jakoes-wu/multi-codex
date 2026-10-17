@@ -12,6 +12,8 @@ import base64
 import json
 import os
 import re
+import time
+from datetime import datetime
 from typing import Dict, Iterable, List, NamedTuple, Optional, Tuple
 
 STORE_FILE = "file"
@@ -46,6 +48,9 @@ class Identity(NamedTuple):
 
     user_id、workspace_id 只用于比较重复登录，不显示、不写进 JSON。
     plan 是 id_token 签发时的套餐，下次刷新令牌后才会更新。
+    subscription_until / subscription_checked（epoch 秒）是令牌里记录的“当期账单结束日”与
+    “OpenAI 最后核对订阅的时间”。实测令牌刷新时它们不一定跟着更新，只能说明截至核对时的账期，
+    不能当成套餐失效时间（feature-billing-period §1）。
     """
     login: str
     email: Optional[str]
@@ -53,6 +58,9 @@ class Identity(NamedTuple):
     user_id: Optional[str]
     workspace_id: Optional[str]
     store: str
+    # 带默认值追加在末尾：现有按 6 个位置参数构造 Identity 的地方不用改。
+    subscription_until: Optional[float] = None
+    subscription_checked: Optional[float] = None
 
 
 def _system_config_path() -> str:
@@ -110,6 +118,29 @@ def _text(value: object) -> Optional[str]:
     return value if isinstance(value, str) and value else None
 
 
+def _parse_iso(value: object) -> Optional[float]:
+    """把令牌里带时区的 ISO 8601 时间（如 2026-09-21T02:36:15+00:00）转成 epoch 秒，读不出时返回 None。
+
+    Python 3.8 的 fromisoformat 不接受末尾的 Z，先换成 +00:00。不带时区的时间返回 None：
+    按本机时区或 UTC 去猜都可能差出几个小时，跨过零点就显示成另一天。
+    超出本平台 time 模块可表示范围的时间（如 32 位系统上 2038 年以后）也返回 None：
+    list 随后要用 time.localtime / time.gmtime 格式化它，在那里抛错会让整个 list 中断。
+    """
+    if not isinstance(value, str) or not value:
+        return None
+    text = value[:-1] + "+00:00" if value.endswith("Z") else value
+    try:
+        moment = datetime.fromisoformat(text)
+        if moment.tzinfo is None:
+            return None
+        epoch = moment.timestamp()
+        time.localtime(epoch)
+        time.gmtime(epoch)
+    except (ValueError, TypeError, OverflowError, OSError):
+        return None
+    return epoch
+
+
 def read_identity(account_dir: str) -> Identity:
     """读取一个账号目录的登录身份（判定顺序见 feature-account-insight §5.1.1）。
 
@@ -145,7 +176,9 @@ def read_identity(account_dir: str) -> Identity:
         email = _text(claims.get("email")) or _text(profile.get("email"))
         user_id = _text(auth.get("chatgpt_user_id")) or _text(auth.get("user_id"))
         workspace_id = _text(auth.get("chatgpt_account_id")) or _text(tokens.get("account_id"))
-        return Identity(LOGIN_CHATGPT, email, _text(auth.get("chatgpt_plan_type")), user_id, workspace_id, store)
+        return Identity(LOGIN_CHATGPT, email, _text(auth.get("chatgpt_plan_type")), user_id, workspace_id, store,
+                        _parse_iso(auth.get("chatgpt_subscription_active_until")),
+                        _parse_iso(auth.get("chatgpt_subscription_last_checked")))
     if data.get("auth_mode") == "apikey" or _text(data.get("OPENAI_API_KEY")):
         return Identity(LOGIN_APIKEY, None, None, None, None, store)
     return Identity(LOGIN_OTHER, None, None, None, None, store)

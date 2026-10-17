@@ -902,7 +902,8 @@ def _print_json(data: dict) -> None:
 
 
 def cmd_list(as_json: bool = False, verbose: bool = False) -> int:
-    """账号一览。默认简表（登录、代理、共享、额度、状态）；verbose 时输出 0.7 及以前的完整表格，逐字不变。"""
+    """账号一览。默认简表（登录、代理、共享、额度、状态）；verbose 时输出 0.7 及以前的完整表格，
+    0.7 的各列在前不变，后面追加了订阅账期两列（feature-billing-period）。"""
     config, exists = load_config()
     migrate.warn_isolation_env()
     if not exists:
@@ -943,7 +944,8 @@ def cmd_list(as_json: bool = False, verbose: bool = False) -> int:
                 "env_keys": sorted(account.env),
                 "login": {"type": found.login if found else identity.LOGIN_LOGGED_OUT,
                           "email": found.email if found else None,
-                          "plan": found.plan if found else None},
+                          "plan": found.plan if found else None,
+                          "subscription": _subscription_json(found)},
             } for name, account, directory, is_dir, found in entries],
             "duplicates": duplicates,
         })
@@ -961,15 +963,22 @@ def cmd_list(as_json: bool = False, verbose: bool = False) -> int:
         print("no accounts registered")
         return accounts.EXIT_OK
     # 前 5 列与 0.2.0 相同，新列只追加在后面，按列位置解析旧输出的脚本不受影响。
-    rows = [("NAME", "DIR", "PROXY", "SHARED", "LAUNCHER", "LOGIN", "PLAN")]
+    rows = [("NAME", "DIR", "PROXY", "SHARED", "LAUNCHER", "LOGIN", "PLAN", "BILLING UNTIL", "CHECKED")]
+    now = time.time()
+    has_passed_period = False
     for name, account, directory, is_dir, found in entries:
+        until_cell, checked_cell, passed = _billing_cells(found, now)
+        has_passed_period = has_passed_period or passed
         rows.append((name, "ok" if is_dir else "missing-dir", account.proxy,
                      _shared_cell(account), accounts.launcher_status(config, name),
                      identity.display_login(found) if found else "-",
-                     (found.plan if found and found.plan else "-")))
+                     (found.plan if found and found.plan else "-"), until_cell, checked_cell))
     widths = [max(len(row[index]) for row in rows) for index in range(len(rows[0]))]
     for row in rows:
         print("  ".join(cell.ljust(width) for cell, width in zip(row, widths)).rstrip())
+    if has_passed_period:
+        print("? the billing period end date has passed; the subscription may have renewed or lapsed"
+              " since OpenAI last checked it (CHECKED)")
     _warn_duplicates(duplicates, entries)
     return accounts.EXIT_OK
 
@@ -1056,6 +1065,38 @@ def _iso_utc(epoch: Optional[float]) -> Optional[str]:
     if epoch is None:
         return None
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(epoch))
+
+
+def _billing_cells(found: Optional[identity.Identity], now: float) -> Tuple[str, str, bool]:
+    """list -v 的 BILLING UNTIL、CHECKED 两格，以及 BILLING UNTIL 是否带 `?`。
+
+    日期来自令牌，常常过时：账期结束日已过只说明“上次核对之后状态未知”，可能已续费也可能已停，
+    所以只加 `?`，不能写成“已过期”。free 账号带的是以前付费时的旧账期，两格都显示 `-`；
+    只认字面值 free，其它套餐名（包括没见过的）照常显示。日期按本机时区，与 JSON 的 UTC 可能差一天。
+    """
+    if found is None or found.login != identity.LOGIN_CHATGPT or found.plan == "free":
+        return "-", "-", False
+    until_cell = "-"
+    passed = False
+    if found.subscription_until is not None:
+        until_cell = time.strftime("%Y-%m-%d", time.localtime(found.subscription_until))
+        passed = found.subscription_until <= now
+        if passed:
+            until_cell += "?"
+    checked_cell = "-"
+    if found.subscription_checked is not None:
+        checked_cell = time.strftime("%Y-%m-%d", time.localtime(found.subscription_checked))
+    return until_cell, checked_cell, passed
+
+
+def _subscription_json(found: Optional[identity.Identity]) -> Optional[dict]:
+    """list --json 的 login.subscription：给脚本原始事实，不像表格那样对 free 隐藏。两个时间都没有时为 null。"""
+    if found is None or found.login != identity.LOGIN_CHATGPT:
+        return None
+    if found.subscription_until is None and found.subscription_checked is None:
+        return None
+    return {"active_until": _iso_utc(found.subscription_until),
+            "last_checked": _iso_utc(found.subscription_checked)}
 
 
 def _usage_cell(result: usage.UsageResult, now: float) -> str:

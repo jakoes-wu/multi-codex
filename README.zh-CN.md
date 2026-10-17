@@ -203,7 +203,7 @@ LOGIN 读自各账号本地的 `auth.json`，不会输出任何令牌，也不�
 
 USAGE 是账号本地会话记录里最近一次的额度快照，与 `multi-codex usage` 读的是同一份数据：`reset` 表示快照之后窗口已经重置；末尾的 `*` 表示 `sessions` 与其它账号共享，额度可能属于别的账号。LAST USED 是账号最近一次使用的时间，取账号目录里会话文件（`sessions/`、`archived_sessions/`）与 `history.jsonl` 中最新的修改时间，只看文件时间、不读内容；`history.jsonl` 是软链（与其它账号共享）时不计入，末尾的 `*` 同样表示 `sessions` 是共享的。`list --json` 里对应 `last_used` 字段（UTC 时间或 `null`）。STATUS 列出需要处理的问题（`missing-dir`、`launcher missing`/`stale`/`conflict`、`not logged in`），`doctor` 会逐条说明。两个账号登录的是同一个 ChatGPT 用户和工作区时，`list` 会给出警告，因为它们共用一份额度。
 
-`list -v` 输出以前版本的完整表格：账号根目录、启动命令目录、共享目录，以及 DIR、LAUNCHER、PLAN 列。PLAN 是当前令牌签发时的套餐，Codex 下次刷新令牌后才会更新。
+`list -v` 输出以前版本的完整表格：账号根目录、启动命令目录、共享目录，以及 DIR、LAUNCHER、PLAN 列，后面再加 BILLING UNTIL、CHECKED 两列。PLAN 是当前令牌签发时的套餐，Codex 下次刷新令牌后才会更新。BILLING UNTIL 是当期账单的结束日，CHECKED 是 OpenAI 最后一次核对订阅的日期，都取自令牌、按本机时区显示。这两个日期常常是旧的（刷新令牌时不一定跟着更新），所以 BILLING UNTIL 不是套餐的过期时间：末尾的 `?` 表示这个日期已经过去，订阅之后可能已续费，也可能已停。`free` 套餐的令牌里可能还留着以前的账期，两列都显示 `-`。`list --json` 对所有套餐都给出这两个日期，字段为 `login.subscription`：`active_until`、`last_checked` 是精确到秒的 UTC 时间，缺哪个哪个为 `null`；两个都没有或不是 ChatGPT 登录时，`subscription` 本身为 `null`。
 
 `multi-codex usage` 从各账号的会话记录（`sessions/` 和 `archived_sessions/`）中读取最近一次的额度快照。这种方式不联网，但数据可能已经过时；快照之后已经重置的窗口显示为 `reset since snapshot`。
 
