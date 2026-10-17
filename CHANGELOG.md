@@ -6,6 +6,11 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- Every command's `-h` ends with a few usage examples, and `multi-codex -h`
+  shows three more everyday examples.
+
 ## [0.12.0] - 2026-10-16
 
 ### Added

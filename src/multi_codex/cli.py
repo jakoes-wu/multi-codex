@@ -11,7 +11,7 @@ import os
 import subprocess
 import sys
 import time
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from . import (__version__, accounts, apps, binding, completion, doctor, identity, launcher, migrate, platform,
                shellpath, switch, usage)
@@ -64,12 +64,143 @@ COMMAND_GROUPS = (
 )
 COMMAND_SUMMARY = {name: summary for _, commands in COMMAND_GROUPS for name, summary in commands}
 
-HELP_EXAMPLES = """examples:
-  multi-codex add work          create account "work" and its launcher codex-work
-  multi-codex login work        log in once
-  multi-codex list              who is logged in where
-  multi-codex use work          make plain codex and the Dock apps use "work"
-"""
+# 帮助里的使用示例：(命令行, 说明)。说明按组对齐后整行不超过 79 列，80 列终端不折行；
+# 测试会逐行量宽度，并把每条 multi-codex 命令行交给解析器，选项改名后这里的示例会让测试失败。
+TOP_EXAMPLES = (
+    ("multi-codex add work", "create account \"work\" and its launcher codex-work"),
+    ("multi-codex login work", "log in once"),
+    ("multi-codex list", "who is logged in where"),
+    ("multi-codex use work", "make plain codex and the Dock apps use \"work\""),
+    ("multi-codex usage", "rate-limit usage of every account"),
+    ("multi-codex bind work", "use \"work\" in this directory (codex-auto)"),
+    ("multi-codex doctor", "check the setup when something looks wrong"),
+)
+# 每个子命令 `-h` 末尾的示例；新增子命令必须在这里加一组，否则 build_parser 会因缺键报错。
+COMMAND_EXAMPLES: Dict[str, Tuple[Tuple[str, str], ...]] = {
+    "init": (
+        ("multi-codex init", "write the default settings"),
+        ("multi-codex init --root ~/accounts", "put accounts elsewhere"),
+        ("multi-codex init --shared-items skills,rules", "share only these items"),
+        ("multi-codex init --dry-run", "show what would change"),
+    ),
+    "migrate-default": (
+        ("multi-codex migrate-default", "name it after the e-mail in ~/.codex"),
+        ("multi-codex migrate-default main", "name the account \"main\""),
+        ("multi-codex migrate-default --dry-run", "show the plan, move nothing"),
+    ),
+    "add": (
+        ("multi-codex add work", "create \"work\" and codex-work"),
+        ("multi-codex add work --proxy 7901", "use http://127.0.0.1:7901"),
+        ("multi-codex add work --shared", "link the shared items into \"work\""),
+        ("multi-codex add new --config-from work", "copy config.toml from \"work\" once"),
+    ),
+    "set": (
+        ("multi-codex set work --proxy off", "stop using a proxy"),
+        ("multi-codex set work --shared", "turn sharing on"),
+        ("multi-codex set work --shared-exclude skills", "do not link skills into \"work\""),
+        ("multi-codex set work --no-shared", "turn sharing off"),
+    ),
+    "proxy": (
+        ("multi-codex proxy work 7901", "same as http://127.0.0.1:7901"),
+        ("multi-codex proxy work socks5://host:1080", "a SOCKS proxy"),
+        ("multi-codex proxy work off", "unset the proxy variables"),
+        ("multi-codex proxy work inherit", "keep your shell's proxy"),
+    ),
+    "rename": (
+        ("multi-codex rename work client-a", "codex-work becomes codex-client-a"),
+        ("multi-codex rename work client-a --dry-run", "show what would change"),
+    ),
+    "remove": (
+        ("multi-codex remove work", "unregister \"work\"; its directory is kept"),
+        ("multi-codex remove work --dry-run", "show what would change"),
+    ),
+    "apply": (
+        ("multi-codex apply", "converge to the configuration"),
+        ("multi-codex apply -f accounts.json", "use this file as the configuration"),
+        ("multi-codex apply --dry-run", "show what would change"),
+    ),
+    "list": (
+        ("multi-codex list", "who is logged in, usage, last used"),
+        ("multi-codex list -v", "full table: directories, plans, billing"),
+        ("multi-codex list --json", "machine-readable output"),
+    ),
+    "usage": (
+        ("multi-codex usage", "last known usage of every account"),
+        ("multi-codex usage work", "only \"work\""),
+        ("multi-codex usage --live", "ask Codex for the current usage"),
+        ("multi-codex usage work --live --timeout 60", "allow up to 60 seconds"),
+    ),
+    "doctor": (
+        ("multi-codex doctor", "check the installation and accounts"),
+        ("multi-codex doctor --json", "machine-readable output"),
+    ),
+    "completion": (
+        ("multi-codex completion zsh", "print the zsh script"),
+        ("multi-codex completion bash", "print the bash script"),
+        ("multi-codex completion fish", "print the fish script"),
+    ),
+    "login": (
+        ("multi-codex login work", "log in to \"work\""),
+        ("multi-codex login work -- --help", "pass options to codex login"),
+    ),
+    "run": (
+        ("multi-codex run work", "start codex with \"work\""),
+        ("multi-codex run", "use the account bound to this directory"),
+        ("multi-codex run work -- env", "run another command with its environment"),
+    ),
+    "bind": (
+        ("multi-codex bind work", "bind the current directory to \"work\""),
+        ("multi-codex bind work ~/src/project", "bind another directory"),
+        ("multi-codex bind", "list the bindings"),
+    ),
+    "unbind": (
+        ("multi-codex unbind", "remove the binding of this directory"),
+        ("multi-codex unbind ~/src/project", "remove the binding of that directory"),
+    ),
+    "which": (
+        ("multi-codex which", "which account this directory uses"),
+        ("multi-codex which ~/src/project", "the same for another directory"),
+    ),
+    "code": (
+        ("multi-codex code work", "open VS Code for \"work\""),
+        ("multi-codex code work ~/src/project", "open a folder"),
+        ("multi-codex code work . --bin ~/bin/code", "use another code command"),
+    ),
+    "app": (
+        ("multi-codex app work", "open the app for \"work\""),
+        ("multi-codex app work --app ~/Apps/ChatGPT.app", "an app in another place"),
+    ),
+    "path": (
+        ("multi-codex path work", "print the directory of \"work\""),
+        ("cd \"$(multi-codex path work)\"", "go to it"),
+    ),
+    "env": (
+        ("multi-codex env work", "list the variables of \"work\""),
+        ("multi-codex env work NO_PROXY=localhost", "set a variable"),
+        ("multi-codex env work --unset NO_PROXY", "remove a variable"),
+        ("multi-codex env work --clear", "remove all variables"),
+    ),
+    "use": (
+        ("multi-codex use", "show the default account"),
+        ("multi-codex use work", "make plain codex and the apps use \"work\""),
+        ("multi-codex use work --dry-run", "show what would change"),
+    ),
+    "restore": (
+        ("multi-codex restore work", "move \"work\" back to ~/.codex"),
+        ("multi-codex restore work --dry-run", "show what would change"),
+    ),
+}
+
+
+def _examples_text(examples: Tuple[Tuple[str, str], ...]) -> str:
+    """排成 argparse epilog：命令行左对齐补到本组最长命令行 + 2，再接说明。"""
+    width = max(len(command) for command, _ in examples) + 2
+    lines = ["examples:"]
+    lines.extend("  {}{}".format(command.ljust(width), summary) for command, summary in examples)
+    return "\n".join(lines) + "\n"
+
+
+HELP_EXAMPLES = _examples_text(TOP_EXAMPLES) + "\nRun multi-codex COMMAND -h for more examples.\n"
 
 
 def _grouped_commands_text() -> str:
@@ -230,6 +361,12 @@ def build_parser() -> argparse.ArgumentParser:
                            help="restore even though credentials are in the system keyring; "
                                 "you will need to log in again afterwards")
     _add_dry_run(p_restore)
+
+    # 示例统一在这里挂到每个子命令上，不改上面各处 add_parser；RawDescriptionHelpFormatter 让示例保持换行与对齐，
+    # 选项说明仍照常自动折行（argparse 在输出帮助时才读 formatter_class 与 epilog，事后赋值有效）。
+    for name, command_parser in sub.choices.items():
+        command_parser.formatter_class = argparse.RawDescriptionHelpFormatter
+        command_parser.epilog = _examples_text(COMMAND_EXAMPLES[name])
     return parser
 
 
