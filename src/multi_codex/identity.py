@@ -12,6 +12,7 @@ import base64
 import json
 import os
 import re
+import time
 from datetime import datetime
 from typing import Dict, Iterable, List, NamedTuple, Optional, Tuple
 
@@ -122,17 +123,22 @@ def _parse_iso(value: object) -> Optional[float]:
 
     Python 3.8 的 fromisoformat 不接受末尾的 Z，先换成 +00:00。不带时区的时间返回 None：
     按本机时区或 UTC 去猜都可能差出几个小时，跨过零点就显示成另一天。
+    超出本平台 time 模块可表示范围的时间（如 32 位系统上 2038 年以后）也返回 None：
+    list 随后要用 time.localtime / time.gmtime 格式化它，在那里抛错会让整个 list 中断。
     """
     if not isinstance(value, str) or not value:
         return None
     text = value[:-1] + "+00:00" if value.endswith("Z") else value
     try:
         moment = datetime.fromisoformat(text)
-    except (ValueError, TypeError):
+        if moment.tzinfo is None:
+            return None
+        epoch = moment.timestamp()
+        time.localtime(epoch)
+        time.gmtime(epoch)
+    except (ValueError, TypeError, OverflowError, OSError):
         return None
-    if moment.tzinfo is None:
-        return None
-    return moment.timestamp()
+    return epoch
 
 
 def read_identity(account_dir: str) -> Identity:

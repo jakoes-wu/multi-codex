@@ -5,6 +5,7 @@ import os
 import sys
 import time
 import unittest
+from unittest import mock
 
 from helpers import SRC
 from test_insight import InsightBase, chatgpt_claims
@@ -37,6 +38,9 @@ class ParseIsoTest(unittest.TestCase):
         for value in ("2026-09-21T02:36:15", "abc", "", 123, None):
             with self.subTest(value=value):
                 self.assertIsNone(identity._parse_iso(value))
+        # 超出平台时间范围：time 模块抛错时返回 None，不让 list 中断（PR #32 评审意见）。
+        with mock.patch.object(identity.time, "localtime", side_effect=OverflowError):
+            self.assertIsNone(identity._parse_iso("2026-09-21T02:36:15+00:00"))
 
 
 class BillingListTest(InsightBase):
@@ -83,15 +87,16 @@ class BillingListTest(InsightBase):
     def test_free_plan_hidden_in_table_only(self):
         """T4：free 在表格里两格为 -，JSON 仍给出日期。"""
         now = time.time()
+        until, checked = now - DAY, now - 2 * DAY
         self.add("work")
-        self.write_auth("work", self.claims("free", until=iso_utc(now - DAY), checked=iso_utc(now - 2 * DAY)))
+        self.write_auth("work", self.claims("free", until=iso_utc(until), checked=iso_utc(checked)))
         result = self.ok("list", "-v")
         self.assertEqual(self.verbose_row(result), ["-", "-"])
         self.assertNotIn(FOOTNOTE, result.out)
         data, _ = self.list_json()
-        subscription = data["accounts"][0]["login"]["subscription"]
-        self.assertIsNotNone(subscription["active_until"])
-        self.assertIsNotNone(subscription["last_checked"])
+        self.assertEqual(data["accounts"][0]["login"]["subscription"],
+                         {"active_until": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(until)),
+                          "last_checked": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(checked))})
 
     def test_only_checked(self):
         """T5：只有核对时间。"""

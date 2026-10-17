@@ -45,6 +45,7 @@
   - 只接受字符串；末尾 `Z` 先换成 `+00:00`（Python 3.8 的 `datetime.fromisoformat` 不接受 `Z`，与 `usage.py:151` 的注释同一个限制）；
   - 用 `datetime.fromisoformat` 解析，结果不带时区（naive）时返回 None，不猜时区；
   - 任何 `ValueError` / `TypeError` 返回 None。`fromisoformat` 在 3.11 起接受的写法比 3.8 宽（如任意位数小数秒），这些边缘写法在不同版本下结果可能不同，测试只用两个版本结果一致的输入；
+  - 解析出的时间若超出本平台 `time.localtime` / `time.gmtime` 的可表示范围（`OverflowError` / `OSError`，如 32 位系统上 2038 年以后），同样返回 None，避免 `list` 格式化时中断（PR #32 评审意见补充）；
   - 两个字段各自独立解析，一个失败不影响另一个。
 - **显示**（`list -v`）：
   - 日期按本机时区显示为 `YYYY-MM-DD`（`time.strftime("%Y-%m-%d", time.localtime(epoch))`，cli.py 已 import `time`，不新增 import）；
