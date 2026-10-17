@@ -1,7 +1,9 @@
 """feature-onboarding-hints §8：下一步提示、上手指引、分组帮助、拼写提示、报错改进、路径缩写与安装收尾提示。"""
 
+import argparse
 import json
 import os
+import shlex
 import subprocess
 import sys
 import unittest
@@ -104,6 +106,14 @@ class HelpTest(OnboardingBase):
         parser = cli.build_parser()
         return set(completion.command_spec(parser))
 
+    @staticmethod
+    def subcommand_parsers(parser):
+        """{子命令: 它的解析器}；与 completion.command_spec 一样按动作类型找子命令表。"""
+        for action in parser._actions:
+            if isinstance(action, argparse._SubParsersAction):
+                return action.choices
+        raise AssertionError("no subcommands registered")
+
     def test_groups_in_order(self):
         out = self.ok("-h").out
         positions = [out.index(title + ":") for title in ("Get started", "Everyday", "Advanced")]
@@ -117,6 +127,50 @@ class HelpTest(OnboardingBase):
 
     def test_subcommand_help_keeps_summary(self):
         self.assertIn(cli.COMMAND_SUMMARY["add"], self.ok("add", "-h").out)
+
+    def test_every_command_has_examples(self):
+        """feature-help-examples T1：每个子命令 2～4 条示例，并出现在它的 -h 末尾。"""
+        self.assertEqual(set(cli.COMMAND_EXAMPLES), self.registered_commands())
+        choices = self.subcommand_parsers(cli.build_parser())
+        for name, examples in cli.COMMAND_EXAMPLES.items():
+            with self.subTest(command=name):
+                self.assertTrue(2 <= len(examples) <= 4)
+                help_text = choices[name].format_help()
+                self.assertIn("examples:", help_text)
+                self.assertIn(examples[0][0], help_text)
+        out = self.ok("proxy", "-h").out
+        self.assertIn("examples:\n  multi-codex proxy work 7901 ", out)
+        self.assertIn("Run multi-codex COMMAND -h for more examples.", self.ok("-h").out)
+
+    def test_examples_parse_and_fit(self):
+        """feature-help-examples T2：示例命令行能被解析器接受；排版后每行不超过 79 列。
+
+        选项必须写全名（关掉缩写匹配）。只验证解析层：`set` 不带选项这类在命令执行时才报的用法错误不在这里覆盖。
+        """
+        parser = cli.build_parser()
+        # 关掉缩写匹配：否则示例里的 --live 在选项改名为 --live-check 后仍按前缀解析成功，测试拦不住。
+        parser.allow_abbrev = False
+        for command_parser in self.subcommand_parsers(parser).values():
+            command_parser.allow_abbrev = False
+        blocks = [cli.HELP_EXAMPLES] + [cli._examples_text(examples) for examples in cli.COMMAND_EXAMPLES.values()]
+        for block in blocks:
+            for line in block.splitlines():
+                with self.subTest(line=line):
+                    self.assertLessEqual(len(line), 79)
+        commands = [command for command, _ in cli.TOP_EXAMPLES]
+        commands += [command for examples in cli.COMMAND_EXAMPLES.values() for command, _ in examples]
+        for command in commands:
+            if not command.startswith("multi-codex "):
+                continue
+            argv = shlex.split(command)[1:]
+            if "--" in argv:
+                # 与 main 一致：run/code/login 的 `--` 之后在解析前就被截走。
+                argv = argv[:argv.index("--")]
+            with self.subTest(command=command):
+                try:
+                    parser.parse_args(argv)
+                except SystemExit:
+                    self.fail("example does not parse: " + command)
 
     def test_completion_lists_every_command_and_option(self):
         spec = completion.command_spec(cli.build_parser())
