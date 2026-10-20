@@ -1,6 +1,6 @@
 # multi-codex：跨账号、跨目录的会话查询 `sessions`
 
-> 2026-10-19 注记：代码已落地（未提交），单测通过，代码评审第 1 轮的中级问题（孤立代理字符让打印崩溃）已修。实现位置：`src/multi_codex/sessions.py`（`read_session`、`clean_title`、`_UNPRINTABLE`），`src/multi_codex/cli.py` 的 `cmd_sessions` 及其辅助函数。本机实跑列出 640 个会话，与 T27 预期一致；2026-10-19 用户手工运行 gmail 账号一条归档会话（`01a0f99b-…`）的续聊命令，Codex 提示 “This conversation is archived”，可选 “Unarchive and resume”（取消归档并续聊）或 Cancel，见 §3。基线：main `59e382b`（v0.12.1）。
+> 2026-10-20 注记：已落地（PR #36，main `ddf7a2e`），随 v0.13.0 发布。plan-review 1 轮；code-reviewer 两轮，第 2 轮“可合并”（第 1 轮中级问题：孤立代理字符让打印崩溃，已在 `_UNPRINTABLE` 加 `Cs`）。发版前编译机 Python 3.8.10 全量测试发现 Linux 的 `strftime("%Y")` 对 1000 年以前不补零，`_local_minute`、`_iso_utc_checked` 改为自己补零，随发版提交一起合入。实现位置：`src/multi_codex/sessions.py`（`read_session`、`clean_title`、`_UNPRINTABLE`），`src/multi_codex/cli.py` 的 `cmd_sessions` 及其辅助函数。验证：本机 Python 3.11 全量 397 个通过；编译机 Python 3.8.10 全量 397 个通过（跳过 11 个，两次）；本机实跑列出 640 个会话；归档会话的续聊命令由用户实测，Codex 先询问是否取消归档（§3）。基线：main `59e382b`（v0.12.1）。
 
 ## 1. 背景
 
