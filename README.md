@@ -139,6 +139,7 @@ Without a name, the account is named after the e-mail address in `~/.codex/auth.
 | Start a new account with another account's settings | `multi-codex add new --config-from work` | [Copying settings](#copying-settings-from-another-account) |
 | Give an account extra environment variables | `multi-codex env work KEY=VALUE` | [Environment variables](#per-account-environment-variables) |
 | Set up all accounts on a new machine | `curl -fsSL https://raw.githubusercontent.com/jakoes-wu/multi-codex/main/install.sh \| sh -s -- --config accounts.json` | [Declarative setup](#declarative-setup-with-apply) |
+| Find which account and directory a session was in | `multi-codex sessions --grep TEXT` | [Finding a session](#finding-a-session) |
 | Get tab completion | `eval "$(multi-codex completion zsh)"` | [Shell completion](#shell-completion) |
 | See what a command would change | add `--dry-run` | [Commands](#commands) |
 | Rename an account | `multi-codex rename work client-a` (the directory and login stay) | [Renaming accounts](#renaming-accounts) |
@@ -168,6 +169,7 @@ More questions are answered in the [FAQ](#faq).
 | `multi-codex apply [-f FILE]` | Converge everything to the configuration (or to `FILE`). |
 | `multi-codex list [-v] [--json]` | Show accounts: who is logged in, proxy, sharing, usage, when last used and status. `-v` shows the full table. |
 | `multi-codex usage [NAME ...] [--live] [--timeout SEC] [--json]` | Show rate-limit usage. |
+| `multi-codex sessions [NAME] [--grep TEXT] [--limit N] [--cmd] [--json]` | List the Codex sessions of every account and directory, newest first. Also `conversations`. Read-only. |
 | `multi-codex doctor [--json]` | Check the installation, configuration and accounts. Read-only. |
 | `multi-codex run [NAME] [-- COMMAND ...]` | Run a command (default: `codex`) with an account's environment. Without NAME, the account bound to the current directory is used. |
 | `multi-codex bind [NAME [DIR]]` / `unbind [DIR]` | Bind a directory to an account, list bindings, or remove one. |
@@ -180,7 +182,7 @@ More questions are answered in the [FAQ](#faq).
 | `multi-codex restore NAME [--skip-process-check] [--accept-relogin]` | Undo `migrate-default`: move the account back to `~/.codex`. |
 | `multi-codex completion bash\|zsh\|fish` | Print a shell completion script. |
 
-Every write command accepts `--dry-run`. `init`, `add`, `set`, `rename`, `proxy`, `remove`, `apply`, `bind`, `unbind` and `env` print only the items they change (or `already up to date`); `-v` / `--verbose` also prints unchanged items. For `list`, `-v` means the full table instead. `list`, `usage` and `doctor` never change anything; with `--json` they print a single JSON object on stdout (with a `"version": 1` field) and keep warnings on stderr. Use `--json` in scripts: the table layout is not guaranteed to stay the same.
+Every write command accepts `--dry-run`. `init`, `add`, `set`, `rename`, `proxy`, `remove`, `apply`, `bind`, `unbind` and `env` print only the items they change (or `already up to date`); `-v` / `--verbose` also prints unchanged items. For `list`, `-v` means the full table instead. `list`, `usage`, `sessions` and `doctor` never change anything; with `--json` they print a single JSON object on stdout (with a `"version": 1` field) and keep warnings on stderr. Use `--json` in scripts: the table layout is not guaranteed to stay the same.
 
 ### Login and usage
 
@@ -201,6 +203,22 @@ LOGIN is read from each account's local `auth.json`: the e-mail address, `api-ke
 `multi-codex usage` reads the most recent rate-limit snapshot from each account's session logs (`sessions/` and `archived_sessions/`). It is offline but can be out of date; a window that has reset since the snapshot is shown as `reset since snapshot`.
 
 `multi-codex usage --live` runs `codex app-server` through the account's launcher (so the account's proxy applies) and asks it for the current usage (`account/rateLimits/read`, Codex 0.48.0 or newer). multi-codex never reads or sends tokens itself. As with any Codex run, Codex may refresh the account's token and write it back to that account's directory. Accounts are queried one after another; `--timeout` limits each one (default 30 seconds).
+
+### Finding a session
+
+Forgot which account or directory a Codex session was started in? `multi-codex sessions` (also `conversations`) lists the sessions of every registered account and of an unregistered `~/.codex`, newest first:
+
+```text
+TITLE                         ACCOUNT           CREATED           UPDATED           SESSION ID
+Evaluate the session list     work@example.com  2026-10-19 16:05  2026-10-19 17:42  01a157c4-3f6d-7452-96cf-e9f4cb89daa9
+[archived] Fix proxy check    default           2026-10-01 15:34  2026-10-01 16:10  01a0f99b-174f-7a53-a15b-e63aca9de061
+```
+
+TITLE is the session's name in Codex, or the beginning of its first prompt when it has no name; `-` means neither was found. Sessions archived in Codex are listed with `[archived]`. Sub-agent sessions are not listed. `NAME` shows one account (`default` is `~/.codex` when it is not an account), `--grep TEXT` keeps sessions whose title, directory or id contains TEXT, and `--limit N` changes the default of 30 (`0` shows all).
+
+`--cmd` adds the command that resumes each session, such as `cd ~/src/proj && codex-work resume 01a157c4-…`; it becomes a CMD column when the terminal is wide enough and a line below each session otherwise. For an archived session, Codex first asks whether to unarchive it and resume. `--json` prints every session with its directory, file and resume command.
+
+Only the first line, the end and, for sessions without a name, the beginning of each session file are read. **Titles and first prompts are parts of your conversations**: they are printed to your terminal (or to the `--json` output) and are not stored or sent anywhere.
 
 ### Health check
 

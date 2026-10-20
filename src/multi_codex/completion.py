@@ -14,7 +14,7 @@ from typing import Dict, List, Tuple
 
 # 第一个位置参数是账号名的子命令；usage 的每个位置参数都是账号名。
 ACCOUNT_COMMANDS = ("add", "set", "rename", "login", "proxy", "remove", "migrate-default", "run", "path", "env",
-                    "usage", "use", "restore", "bind", "code", "app")
+                    "usage", "use", "restore", "bind", "code", "app", "sessions")
 MULTI_ACCOUNT_COMMANDS = ("usage",)
 SHELLS = ("bash", "zsh", "fish")
 
