@@ -17,3 +17,6 @@ steps to reproduce. You should receive a reply within a week.
 - Generated launchers are world-readable; proxy URLs with credentials are
   rejected for that reason.
 - New account directories are created with mode `0700`.
+- `multi-codex sessions` reads Codex session files and prints session names and
+  the beginning of first prompts to your terminal (or `--json` output). It does
+  not store them or send them anywhere.

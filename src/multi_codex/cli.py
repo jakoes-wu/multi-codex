@@ -8,13 +8,17 @@ import argparse
 import difflib
 import json
 import os
+import shlex
+import shutil
 import subprocess
 import sys
 import time
+import unicodedata
+from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 
 from . import (__version__, accounts, apps, binding, completion, doctor, identity, launcher, migrate, platform,
-               shellpath, switch, usage)
+               sessions, shellpath, switch, usage)
 from .actions import CREATE, DELETE, UNCHANGED, UPDATE, Action, error, hint, info, print_action, warn
 from .config import (DEFAULT_SHARED_DIR, DEFAULT_SHARED_ITEMS, Account, Config, ConfigError, is_socks,
                      is_unshareable, load_config, normalize_proxy, parse_config, unique_items, validate_env_key,
@@ -43,6 +47,7 @@ COMMAND_GROUPS = (
         ("set", "change an existing account: proxy, sharing, adopted links"),
         ("run", "run a command with an account's environment (default: codex)"),
         ("usage", "show rate-limit usage of accounts"),
+        ("sessions", "find a session across accounts and directories"),
         ("use", "show or change the default account (what ~/.codex points to)"),
         ("bind", "bind a directory to an account (no arguments: list bindings)"),
         ("unbind", "remove the binding of a directory"),
@@ -129,6 +134,12 @@ COMMAND_EXAMPLES: Dict[str, Tuple[Tuple[str, str], ...]] = {
         ("multi-codex usage work", "only \"work\""),
         ("multi-codex usage --live", "ask Codex for the current usage"),
         ("multi-codex usage work --live --timeout 60", "allow up to 60 seconds"),
+    ),
+    "sessions": (
+        ("multi-codex sessions", "newest 30 sessions of every account"),
+        ("multi-codex sessions work --grep proxy", "only \"work\", title/dir/id matching"),
+        ("multi-codex sessions --cmd", "also show how to resume each one"),
+        ("multi-codex sessions --json", "machine-readable, all sessions"),
     ),
     "doctor": (
         ("multi-codex doctor", "check the installation and accounts"),
@@ -294,6 +305,21 @@ def build_parser() -> argparse.ArgumentParser:
                          help="total time limit per account for --live, in seconds (default 30)")
     _add_json(p_usage)
 
+    p_sessions = sub.add_parser("sessions", description=COMMAND_SUMMARY["sessions"] + ": list the Codex sessions "
+                                "of every account and every directory, newest first (read-only; also available "
+                                "as `conversations`)")
+    p_sessions.add_argument("name", nargs="?", metavar="NAME",
+                            help="only this account; `default` is ~/.codex when it is not an account")
+    p_sessions.add_argument("--grep", metavar="TEXT",
+                            help="only sessions whose title, directory or id contains TEXT (case-insensitive)")
+    p_sessions.add_argument("--limit", type=int, metavar="N",
+                            help="show at most N sessions, 0 for all (default: 30, or all with --json)")
+    p_sessions.add_argument("--cmd", action="store_true",
+                            help="also print the command that resumes each session (a CMD column when the "
+                                 "terminal is wide enough, otherwise a line below each session; the SESSION ID "
+                                 "column is left out because the command contains it)")
+    _add_json(p_sessions)
+
     p_doctor = sub.add_parser("doctor", description=COMMAND_SUMMARY["doctor"])
     _add_json(p_doctor)
 
@@ -434,6 +460,23 @@ def _split_run_command(argv: List[str]) -> Tuple[List[str], List[str]]:
     return argv, []
 
 
+# 别名 -> 子命令。不用 argparse 的 aliases：别名进了解析器，分组帮助、示例表、补全和 args.command 都要跟着处理两个名字。
+_COMMAND_ALIASES = {"conversations": "sessions"}
+
+
+def _resolve_command_alias(argv: List[str]) -> List[str]:
+    """把子命令位置上的别名换成正式的子命令名；其它位置上的同名词（例如叫 conversations 的账号）不动。
+
+    子命令位置就是第一个不以 - 开头的词：顶层只有 -h 与 --version 两个不带值的选项，_unknown_command 也按同一规则取词。
+    """
+    for index, token in enumerate(argv):
+        if not token.startswith("-"):
+            if token in _COMMAND_ALIASES:
+                return argv[:index] + [_COMMAND_ALIASES[token]] + argv[index + 1:]
+            break
+    return argv
+
+
 def _unknown_command(parser: argparse.ArgumentParser, argv: List[str]) -> Optional[str]:
     """子命令拼错时返回带建议的报错文字；命令名正确或交给 argparse 处理更合适时返回 None。
 
@@ -459,6 +502,7 @@ def _unknown_command(parser: argparse.ArgumentParser, argv: List[str]) -> Option
 def main(argv: Optional[List[str]] = None) -> int:
     parser = build_parser()
     argv, run_command = _split_run_command(list(sys.argv[1:] if argv is None else argv))
+    argv = _resolve_command_alias(argv)
     if not argv:
         # 不带任何参数：新用户最常见的第一次运行，给上手指引而不是 argparse 的“缺少 COMMAND”报错。
         print_getting_started()
@@ -481,6 +525,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         # 只读命令，与迁移无关：放在读取事务记录之前分派，记录损坏时 doctor 才能把它报出来。
         if args.command == "usage":
             return cmd_usage(args)
+        if args.command == "sessions":
+            return cmd_sessions(args.name, args.grep, args.limit, args.json, args.cmd)
         if args.command == "doctor":
             return cmd_doctor(args)
         if args.command == "completion":
@@ -1507,6 +1553,212 @@ def cmd_path(name: str) -> int:
     if not os.path.isdir(directory):
         warn("account directory does not exist: {}".format(directory))
     return accounts.EXIT_OK
+
+
+# ---- 会话列表（方案 feature-session-list） ----
+
+class _SessionSource(object):
+    """一个要列会话的目录。name 是账号列显示的名字（未登记的默认目录显示 default），
+    launcher 是续聊命令里启动 Codex 的那一段。"""
+
+    def __init__(self, name: str, directory: str, launcher_cmd: str, registered: bool) -> None:
+        self.name = name
+        self.directory = directory
+        self.launcher = launcher_cmd
+        self.registered = registered
+
+
+_UNREGISTERED_DEFAULT = "default"
+# 未登记的默认目录没有启动命令，只能直接运行 codex：去掉 CODEX_HOME 与启动命令同样会清除的变量，
+# 在别的账号的终端里运行也会落到 ~/.codex，并用它自己的登录。
+_DEFAULT_RESUME_LAUNCHER = "env " + " ".join("-u " + key for key in ("CODEX_HOME",) + platform.ISOLATION_BREAKING_ENV) \
+    + " codex"
+_SESSIONS_TEXT_LIMIT = 30
+# 标题来自会话内容，可能是整段粘贴的提问：表格里只留开头，JSON 里也设上限
+_TITLE_TEXT_CHARS = 60
+_TITLE_JSON_CHARS = 200
+_ARCHIVED_MARK = "[archived] "
+
+
+def _session_sources(config: Config, exists: bool) -> List[_SessionSource]:
+    """要列会话的目录：登记的每个账号，加上还没变成账号的默认目录 ~/.codex。"""
+    sources = [_SessionSource(account.name, accounts.account_dir(config, account.name),
+                              launcher.LAUNCHER_PREFIX + account.name, True)
+               for account in (config.accounts.values() if exists else [])]
+    default = expand(platform.default_source())
+    # use / migrate-default 之后 ~/.codex 是指向账号目录的软链：按真实路径比较，同一批会话才不会列两遍
+    known = {os.path.realpath(source.directory) for source in sources}
+    if os.path.isdir(default) and os.path.realpath(default) not in known:
+        sources.append(_SessionSource(_UNREGISTERED_DEFAULT, default, _DEFAULT_RESUME_LAUNCHER, False))
+    return sources
+
+
+def cmd_sessions(name: Optional[str], grep: Optional[str], limit: Optional[int], as_json: bool,
+                 show_cmd: bool = False) -> int:
+    """只读列出各账号、各目录的会话，最近更新的在前。
+
+    show_cmd 只影响文本输出：为真时才打印续聊命令；JSON 始终带 resume 字段。
+    会把会话名称或首条提问的开头打印出来（这是对话内容的片段），不保存、不联网、不读凭据。
+    同一会话 ID 在多个账号里各有一份时各列一行，不合并。
+    """
+    if limit is not None and limit < 0:
+        raise UsageError("--limit must be 0 or more")
+    if name is not None:
+        # 名字先校验，没有配置文件或配置损坏时也一样：不合法的名字是用法错误（退出 2），不是“未登记”
+        _checked_name(name)
+    config, exists = load_config()
+    sources = _session_sources(config, exists)
+    if name is not None:
+        account = config.find(name) if exists else None
+        if account is not None:
+            # 登记账号优先：账号本身叫 default 时，`sessions default` 指的是它，不是未登记的默认目录
+            sources = [source for source in sources if source.registered and source.name == account.name]
+        elif name.casefold() == _UNREGISTERED_DEFAULT and any(not source.registered for source in sources):
+            sources = [source for source in sources if not source.registered]
+        else:
+            error(config.not_registered(name))
+            return accounts.EXIT_ERROR
+    entries = []
+    skipped = 0
+    needle = grep.casefold() if grep else None
+    for source in sources:
+        found, unreadable = sessions.list_sessions(source.directory)
+        skipped += unreadable
+        for session in found:
+            full_title = sessions.clean_title(session.title, len(session.title))
+            if needle is not None and not any(needle in text.casefold() for text in (
+                    full_title, session.directory or "", session.session_id)):
+                continue
+            entries.append((source, session, full_title))
+    entries.sort(key=lambda entry: (-entry[1].updated, entry[0].name, entry[1].session_id))
+    total = len(entries)
+    if limit is None:
+        limit = 0 if as_json else _SESSIONS_TEXT_LIMIT
+    if limit:
+        entries = entries[:limit]
+    if skipped:
+        warn("skipped {} session file(s) that could not be read".format(skipped))
+    if as_json:
+        _print_json({"version": 1, "sessions": [{
+            "account": source.name, "registered": source.registered, "directory": session.directory,
+            "session_id": session.session_id,
+            "title": sessions.clean_title(full_title, _TITLE_JSON_CHARS), "title_source": session.title_source,
+            "archived": session.archived, "created": _iso_utc_checked(session.created),
+            "updated": _iso_utc_checked(session.updated), "file": session.path,
+            "resume": _resume_command(source, session)} for source, session, full_title in entries],
+            "total": total, "skipped": skipped})
+        return accounts.EXIT_OK
+    if not entries:
+        print("no sessions found")
+        return accounts.EXIT_OK
+    # 不用通用表格输出：标题在第一列且可能是中文，要按终端显示宽度对齐；带 --cmd 时还要在两种排版之间选。
+    header = ["TITLE", "ACCOUNT", "CREATED", "UPDATED", "SESSION ID"]
+    rows = []
+    commands = []
+    for source, session, full_title in entries:
+        title = sessions.clean_title(full_title, _TITLE_TEXT_CHARS) or "-"
+        if session.archived:
+            title = _ARCHIVED_MARK + title
+        rows.append([title, source.name, _local_minute(session.created), _local_minute(session.updated),
+                     session.session_id])
+        resume = _resume_command(source, session, tilde=True)
+        if session.directory is None:
+            resume += "  (start directory unknown)"
+        commands.append(resume)
+    if not show_cmd:
+        for line in _aligned([header] + rows):
+            print(line)
+    else:
+        # 续聊命令里总有会话 ID（目录未知时也有），带 --cmd 时两种排版都去掉 SESSION ID 列，
+        # 免得同一串 ID 在一条会话里出现两次；不带 --cmd 时它是唯一能看到 ID 的地方，必须保留。
+        header = header[:-1]
+        rows = [row[:-1] for row in rows]
+        # 续聊命令很长：整张表（表头与数据行，不含末尾的截断提示）放得下终端宽度才并成 CMD 列，
+        # 否则命令在窄终端里会从中间折行，比单独一行更难读、也更难复制。按整张表决定，不逐行切换。
+        wide = _aligned([header + ["CMD"]] + [row + [command] for row, command in zip(rows, commands)])
+        if max(_display_width(line) for line in wide) <= shutil.get_terminal_size((80, 24)).columns:
+            for line in wide:
+                print(line)
+        else:
+            narrow = _aligned([header] + rows)
+            print(narrow[0])
+            for line, command in zip(narrow[1:], commands):
+                print(line)
+                print("  " + command)
+    if total > len(entries):
+        print("showing {} of {} sessions; use --limit 0 for all, or --grep TEXT to narrow".format(len(entries), total))
+    return accounts.EXIT_OK
+
+
+def _resume_command(source: _SessionSource, session: sessions.SessionInfo, tilde: bool = False) -> str:
+    """续聊命令：先 cd 到会话启动时的目录，再用该账号的启动命令 resume；目录未知时只给后半段。
+
+    tilde 为真时把主目录写成 ~，只用于给人看的文本输出；JSON 的 resume 字段保持绝对路径。
+    """
+    resume = "{} resume {}".format(source.launcher, session.session_id)
+    if session.directory is None:
+        return resume
+    target = _tilde_path(session.directory) if tilde else shlex.quote(session.directory)
+    return "cd {} && {}".format(target, resume)
+
+
+def _tilde_path(directory: str) -> str:
+    """把主目录之下的目录写成 ~/…，可直接拼在 cd 后面；不在主目录之下时与 shlex.quote 相同。
+
+    按字符串前缀比较，不解析软链：会话里记的是当时的目录原文。
+    """
+    home = os.path.expanduser("~")
+    if not os.path.isabs(home) or home == os.sep:
+        return shlex.quote(directory)
+    if directory == home:
+        return "~"
+    if not directory.startswith(home + os.sep):
+        return shlex.quote(directory)
+    rest = directory[len(home) + 1:]
+    # 波浪号必须留在引号外面，放进引号里 shell 不会把它展开成主目录
+    return "~/" + shlex.quote(rest) if rest else "~"
+
+
+def _display_width(text: str) -> int:
+    """文字在终端里占的格数：中日韩等宽字符占 2 格，组合字符和零宽连接符不占格。
+
+    表情符号的组合序列在不同终端里宽度不一，这里可能差一格。
+    """
+    width = 0
+    for char in text:
+        if char in sessions.KEPT_FORMAT_CHARS or unicodedata.category(char) in ("Mn", "Me"):
+            continue
+        width += 2 if unicodedata.east_asian_width(char) in ("W", "F") else 1
+    return width
+
+
+def _aligned(rows: List[List[str]]) -> List[str]:
+    """按显示宽度对齐各列，返回每行的文字；列间两个空格，最后一列不补空格。"""
+    widths = [max(_display_width(row[index]) for row in rows) for index in range(len(rows[0]))]
+    lines = []
+    for row in rows:
+        # str.ljust 按字符数补空格，中文标题会少补；这里按显示宽度补
+        cells = [cell + " " * (width - _display_width(cell)) for cell, width in zip(row, widths)]
+        lines.append("  ".join(cells).rstrip())
+    return lines
+
+
+def _local_minute(epoch: Optional[float]) -> str:
+    """本机时区的 YYYY-MM-DD HH:MM；没有时间或超出本机能表示的范围（如 0001 年、9999 年末）时为 -。"""
+    if epoch is None:
+        return "-"
+    try:
+        return datetime.fromtimestamp(epoch).strftime("%Y-%m-%d %H:%M")
+    except (OverflowError, OSError, ValueError):
+        return "-"
+
+
+def _iso_utc_checked(epoch: Optional[float]) -> Optional[str]:
+    # 时间来自会话内容，可能超出 gmtime 的范围；转不了时与“没有时间”一样记为 null
+    try:
+        return _iso_utc(epoch)
+    except (OverflowError, OSError, ValueError):
+        return None
 
 
 def cmd_env_list(name: str) -> int:

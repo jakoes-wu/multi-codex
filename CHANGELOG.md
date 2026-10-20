@@ -6,6 +6,15 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- `multi-codex sessions [NAME] [--grep TEXT] [--limit N] [--cmd] [--json]` (also
+  `conversations`) lists the Codex sessions of every account and of an
+  unregistered `~/.codex`, newest first, with the account and session id.
+  Archived sessions are marked `[archived]`; sub-agent sessions are not listed.
+  `--cmd` shows how to resume each one (including the directory) and `--json`
+  adds the directory and session file. Read-only.
+
 ## [0.12.1] - 2026-10-17
 
 ### Added

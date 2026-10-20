@@ -139,6 +139,7 @@ multi-codex migrate-default
 | 新账号沿用另一个账号的配置 | `multi-codex add new --config-from work` | 从另一个账号复制配置 |
 | 给账号加额外的环境变量 | `multi-codex env work KEY=VALUE` | 每个账号的环境变量 |
 | 在新机器上一次建好所有账号 | `curl -fsSL https://raw.githubusercontent.com/jakoes-wu/multi-codex/main/install.sh \| sh -s -- --config accounts.json` | 用 `apply` 声明式部署 |
+| 查某个会话在哪个账号、哪个目录 | `multi-codex sessions --grep 文字` | [查找会话](#查找会话) |
 | 开启 Tab 补全 | `eval "$(multi-codex completion zsh)"` | shell 补全 |
 | 先看看命令会改什么 | 加 `--dry-run` | 命令 |
 | 账号改名 | `multi-codex rename work client-a`（目录与登录不变） | 账号改名 |
@@ -168,6 +169,7 @@ multi-codex migrate-default
 | `multi-codex apply [-f 文件]` | 按配置（或指定文件）收敛全部账号 |
 | `multi-codex list [-v] [--json]` | 列出账号：登录身份、代理、共享、额度、最近使用时间和状态；`-v` 输出完整表格 |
 | `multi-codex usage [名称 ...] [--live] [--timeout 秒] [--json]` | 显示额度用量 |
+| `multi-codex sessions [名称] [--grep 文字] [--limit N] [--cmd] [--json]` | 列出各账号、各目录的 Codex 会话，最近的在前；也可写 `conversations`；只读 |
 | `multi-codex doctor [--json]` | 检查安装、配置和各账号，只读 |
 | `multi-codex run [名称] [-- 命令 ...]` | 在账号的环境下运行命令（默认运行 `codex`）；省略名称时，使用当前目录绑定的账号 |
 | `multi-codex bind [名称 [目录]]` / `unbind [目录]` | 把目录绑定到账号、列出绑定，或解除绑定 |
@@ -180,7 +182,7 @@ multi-codex migrate-default
 | `multi-codex restore 名称 [--skip-process-check] [--accept-relogin]` | 撤销 `migrate-default`：把账号移回 `~/.codex` |
 | `multi-codex completion bash\|zsh\|fish` | 输出 shell 补全脚本 |
 
-所有写命令都支持 `--dry-run`。`init`、`add`、`set`、`rename`、`proxy`、`remove`、`apply`、`bind`、`unbind`、`env` 只打印有变化的项（没有变化时输出 `already up to date`），加 `-v` / `--verbose` 时连没变的项也打印。`list` 的 `-v` 含义不同，表示输出完整表格。`list`、`usage`、`doctor` 不会修改任何东西；加 `--json` 时，stdout 上只输出一个 JSON 对象（带 `"version": 1` 字段），警告仍写到 stderr。脚本请使用 `--json`：表格格式不保证稳定。
+所有写命令都支持 `--dry-run`。`init`、`add`、`set`、`rename`、`proxy`、`remove`、`apply`、`bind`、`unbind`、`env` 只打印有变化的项（没有变化时输出 `already up to date`），加 `-v` / `--verbose` 时连没变的项也打印。`list` 的 `-v` 含义不同，表示输出完整表格。`list`、`usage`、`sessions`、`doctor` 不会修改任何东西；加 `--json` 时，stdout 上只输出一个 JSON 对象（带 `"version": 1` 字段），警告仍写到 stderr。脚本请使用 `--json`：表格格式不保证稳定。
 
 ### 登录身份与额度
 
@@ -208,6 +210,22 @@ USAGE 是账号本地会话记录里最近一次的额度快照，与 `multi-cod
 `multi-codex usage` 从各账号的会话记录（`sessions/` 和 `archived_sessions/`）中读取最近一次的额度快照。这种方式不联网，但数据可能已经过时；快照之后已经重置的窗口显示为 `reset since snapshot`。
 
 `multi-codex usage --live` 通过该账号的启动命令运行 `codex app-server`，所以会使用该账号的代理；然后向它查询当前额度（`account/rateLimits/read`，需要 Codex 0.48.0 或更高版本）。multi-codex 自己不读取、也不发送令牌。与平常运行 Codex 一样，Codex 可能刷新该账号的令牌并写回该账号的目录。多个账号依次查询，`--timeout` 限制每个账号的总耗时（默认 30 秒）。
+
+### 查找会话
+
+忘了某个 Codex 会话是在哪个账号、哪个目录下开的？`multi-codex sessions`（也可以写 `conversations`）列出所有登记账号以及未登记的 `~/.codex` 里的会话，最近更新的在前：
+
+```text
+TITLE                         ACCOUNT           CREATED           UPDATED           SESSION ID
+Evaluate the session list     work@example.com  2026-10-19 16:05  2026-10-19 17:42  01a157c4-3f6d-7452-96cf-e9f4cb89daa9
+[archived] Fix proxy check    default           2026-10-01 15:34  2026-10-01 16:10  01a0f99b-174f-7a53-a15b-e63aca9de061
+```
+
+TITLE 是会话在 Codex 里的名称，没有名称时取首条提问的开头，两者都没有时显示 `-`。在 Codex 里归档过的会话带 `[archived]` 标记。子代理会话不列出。`名称` 只看一个账号（`~/.codex` 还不是账号时用 `default`），`--grep 文字` 只保留标题、目录或会话 ID 含该文字的会话，`--limit N` 改变默认的 30 条（`0` 表示全部）。
+
+`--cmd` 额外给出续聊命令，例如 `cd ~/src/proj && codex-work resume 01a157c4-…`：终端够宽时作为 CMD 列，否则写在每条会话下一行。归档会话续聊前，Codex 会先问是否取消归档再续聊。`--json` 输出全部会话，含目录、会话文件和续聊命令。
+
+每个会话文件只读第一行、末尾一段，没有名称的再读开头一段。**标题和首条提问是对话内容的一部分**：只打印到终端（或 `--json` 的输出），不保存，也不发送到任何地方。
 
 ### 体检
 
