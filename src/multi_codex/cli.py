@@ -1748,17 +1748,24 @@ def _local_minute(epoch: Optional[float]) -> str:
     if epoch is None:
         return "-"
     try:
-        return datetime.fromtimestamp(epoch).strftime("%Y-%m-%d %H:%M")
+        moment = datetime.fromtimestamp(epoch)
     except (OverflowError, OSError, ValueError):
         return "-"
+    # 不用 strftime 的 %Y：Linux 的 glibc 对 1000 年以前不补零（0001 年打成 1），macOS 会补
+    return "{:04d}-{:02d}-{:02d} {:02d}:{:02d}".format(
+        moment.year, moment.month, moment.day, moment.hour, moment.minute)
 
 
 def _iso_utc_checked(epoch: Optional[float]) -> Optional[str]:
-    # 时间来自会话内容，可能超出 gmtime 的范围；转不了时与“没有时间”一样记为 null
+    # 时间来自会话内容，可能超出 gmtime 的范围；转不了时与“没有时间”一样记为 null。
+    # 自己补零而不调 _iso_utc：其中 strftime 的 %Y 在 Linux 上对 1000 年以前不补零（见 _local_minute）
+    if epoch is None:
+        return None
     try:
-        return _iso_utc(epoch)
+        moment = time.gmtime(epoch)
     except (OverflowError, OSError, ValueError):
         return None
+    return "{:04d}-{:02d}-{:02d}T{:02d}:{:02d}:{:02d}Z".format(*moment[:6])
 
 
 def cmd_env_list(name: str) -> int:

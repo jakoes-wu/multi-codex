@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-10-20
+
 ### Added
 
 - `multi-codex sessions [NAME] [--grep TEXT] [--limit N] [--cmd] [--json]` (also
@@ -259,7 +261,8 @@ First release (macOS and Linux).
 - Optional shared resources linked from one directory into selected accounts.
 - `install.sh` with `--config`, `--prefix` and `--uninstall`.
 
-[Unreleased]: https://github.com/jakoes-wu/multi-codex/compare/v0.12.1...HEAD
+[Unreleased]: https://github.com/jakoes-wu/multi-codex/compare/v0.13.0...HEAD
+[0.13.0]: https://github.com/jakoes-wu/multi-codex/compare/v0.12.1...v0.13.0
 [0.12.1]: https://github.com/jakoes-wu/multi-codex/compare/v0.12.0...v0.12.1
 [0.12.0]: https://github.com/jakoes-wu/multi-codex/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/jakoes-wu/multi-codex/compare/v0.10.0...v0.11.0
