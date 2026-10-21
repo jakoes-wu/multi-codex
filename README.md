@@ -1,12 +1,13 @@
 # multi-codex
 
-**English** | [简体中文](README.zh-CN.md)
+**English** | [简体中文](https://github.com/jakoes-wu/multi-codex/blob/main/README.zh-CN.md)
 
 [![Release](https://img.shields.io/github/v/release/jakoes-wu/multi-codex)](https://github.com/jakoes-wu/multi-codex/releases)
 [![CI](https://github.com/jakoes-wu/multi-codex/actions/workflows/ci.yml/badge.svg)](https://github.com/jakoes-wu/multi-codex/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/multi-codex)](https://pypi.org/project/multi-codex/)
 ![Python](https://img.shields.io/badge/python-3.8%2B-blue)
-[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](https://github.com/jakoes-wu/multi-codex/blob/main/LICENSE)
+![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey)
 
 Use several [Codex CLI](https://github.com/openai/codex) accounts on one machine, at the same time. Each account keeps its own login, settings, history and, if you like, its own proxy. No more logging out and in again.
 
@@ -518,7 +519,7 @@ This removes the tool only. Your configuration, account directories, `codex-<nam
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md). Run the tests with:
+See [CONTRIBUTING.md](https://github.com/jakoes-wu/multi-codex/blob/main/CONTRIBUTING.md). Run the tests with:
 
 ```sh
 python3 -m unittest discover -s tests -t tests
@@ -526,4 +527,4 @@ python3 -m unittest discover -s tests -t tests
 
 ## License
 
-[MIT](LICENSE)
+[MIT](https://github.com/jakoes-wu/multi-codex/blob/main/LICENSE)
