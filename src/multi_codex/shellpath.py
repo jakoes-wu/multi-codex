@@ -49,4 +49,22 @@ def current_path_hint(directory: str) -> str:
 
     用 sys.platform 判断 macOS：本包有自己的 platform 模块，不导入标准库同名模块。
     """
+    if sys.platform == "win32":
+        return windows_path_hint(directory)
     return path_hint(directory, os.environ.get("SHELL"), sys.platform == "darwin")
+
+
+# PowerShell 双引号里 $ 和 ` 会展开或转义，" 会结束字符串；目录含这些字符时只给 pipx ensurepath。
+_POWERSHELL_UNSAFE_CHARS = ('"', "$", "`")
+
+
+def windows_path_hint(directory: str) -> str:
+    """Windows 的提示：pipx ensurepath，或一条把目录加进用户级 Path 的 PowerShell 命令。
+
+    Windows 没有 $SHELL，也不读 rc 文件；用户级 Path 存在注册表里，新开的终端才会生效。
+    """
+    if any(char in directory for char in _POWERSHELL_UNSAFE_CHARS):
+        return "run: pipx ensurepath, then open a new terminal"
+    command = ('[Environment]::SetEnvironmentVariable("Path", "{};" + '
+               '[Environment]::GetEnvironmentVariable("Path","User"), "User")'.format(directory))
+    return "run: pipx ensurepath, or in PowerShell: {}, then open a new terminal".format(command)

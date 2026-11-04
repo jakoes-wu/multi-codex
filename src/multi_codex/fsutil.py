@@ -39,12 +39,20 @@ def is_under(path: str, root: str) -> bool:
 
 
 def entry_kind(path: str) -> str:
-    """按 lstat 判断目录项类型，不跟随软链；断开的软链返回 KIND_LINK。"""
+    """按 lstat 判断目录项类型，不跟随软链；断开的软链返回 KIND_LINK。
+
+    Windows 上 junction 的 S_ISLNK 为假、S_ISDIR 为真，这里也判为 KIND_LINK：所有调用方由此统一把它当链接，
+    不会把共享目录当成账号自己的真实目录去删除或复制。
+    """
     try:
         st = os.lstat(path)
     except FileNotFoundError:
         return KIND_MISSING
     if stat.S_ISLNK(st.st_mode):
+        return KIND_LINK
+    # 在函数体内导入：platform 顶层导入了本模块，顶层互相导入会循环
+    from . import platform
+    if platform.IS_WINDOWS and platform.is_junction(path):
         return KIND_LINK
     if stat.S_ISDIR(st.st_mode):
         return KIND_DIR
@@ -76,7 +84,9 @@ def atomic_write(path: str, content: str, mode: int = 0o644) -> None:
             handle.flush()
             os.fsync(handle.fileno())
         os.chmod(tmp_path, mode)
-        os.replace(tmp_path, path)
+        from . import platform
+        # Windows 上杀毒软件、索引服务短暂打开目标文件时 replace 会失败，退避重试；POSIX 只调用一次
+        platform.retry_on_sharing_violation("atomic-replace", os.replace, tmp_path, path)
     except BaseException:
         try:
             os.unlink(tmp_path)
@@ -120,8 +130,23 @@ def remove_path(path: str) -> None:
     if kind == KIND_DIR:
         _grant_owner_access(path)
         shutil.rmtree(path)
+    elif kind == KIND_LINK:
+        from . import platform
+        # Windows 上 junction 与目录符号链接要用 rmdir 删；只删链接本身，不碰它指向的内容
+        platform.remove_link(path)
     else:
         os.unlink(path)
+
+
+def _prune_junctions(dirpath: str, dirnames: List[str]) -> None:
+    """从 os.walk 的 dirnames 里剔除 junction，不进入它指向的目录。
+
+    Python 3.8–3.13 的 os.walk 只用 islink 判断是否跟随，junction 会被当成普通目录进入；
+    POSIX 上没有 junction，什么也不做。
+    """
+    from . import platform
+    if platform.IS_WINDOWS:
+        dirnames[:] = [name for name in dirnames if not platform.is_junction(os.path.join(dirpath, name))]
 
 
 def _grant_owner_access(root: str) -> None:
@@ -135,6 +160,7 @@ def _grant_owner_access(root: str) -> None:
     """
     _add_owner_rwx(root)
     for dirpath, dirnames, _filenames in os.walk(root, followlinks=False):
+        _prune_junctions(dirpath, dirnames)
         for name in dirnames:
             full = os.path.join(dirpath, name)
             if entry_kind(full) == KIND_DIR:
@@ -169,13 +195,16 @@ def build_manifest(root: str) -> Tuple[Dict[str, ManifestEntry], List[str]]:
             rel = name if rel_dir == "." else os.path.join(rel_dir, name)
             kind = entry_kind(full)
             if kind == KIND_LINK:
-                manifest[rel] = (KIND_LINK, 0, os.readlink(full))
+                from . import platform
+                manifest[rel] = (KIND_LINK, 0, platform.read_link(full))
             elif kind == KIND_DIR:
                 manifest[rel] = (KIND_DIR, 0, "")
             elif kind == KIND_FILE:
                 manifest[rel] = (KIND_FILE, os.lstat(full).st_size, _sha256(full))
             elif kind == KIND_SPECIAL:
                 skipped.append(rel)
+        # 先把 junction 按链接记进清单（上面的循环），再剔除，不进入它指向的目录
+        _prune_junctions(dirpath, dirnames)
     return manifest, skipped
 
 
@@ -212,7 +241,9 @@ def copy_tree(src: str, dst: str, on_progress: Optional[Callable[[str], None]] =
             target = os.path.join(target_dir, name)
             kind = entry_kind(full)
             if kind == KIND_LINK:
-                os.symlink(os.readlink(full), target)
+                from . import platform
+                # 链接原样复制（目标文本不变、类型不变）；不能用 create_link，它会按目标是否为目录重新选类型
+                platform.copy_link(full, target)
             elif kind == KIND_DIR:
                 os.mkdir(target)
                 dir_modes.append((full, target))
@@ -222,6 +253,8 @@ def copy_tree(src: str, dst: str, on_progress: Optional[Callable[[str], None]] =
                     on_progress(target)
             elif kind == KIND_SPECIAL:
                 skipped.append(os.path.relpath(full, src))
+        # 先在目标侧复制出 junction（上面的循环），再剔除，不进入它指向的目录
+        _prune_junctions(dirpath, dirnames)
     for source_dir, target_dir in reversed(dir_modes):
         shutil.copystat(source_dir, target_dir, follow_symlinks=False)
     return skipped

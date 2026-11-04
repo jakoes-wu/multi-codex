@@ -236,7 +236,7 @@ def _precheck_without_journal(config: Config, config_exists: bool, name: str, so
 def _check_credentials_store(source: str, name: str, accept_relogin: bool,
                              relogin_command: Optional[str] = None) -> Tuple[Optional[int], bool]:
     """凭据存在系统钥匙串时，移动目录后会丢登录：钥匙串条目的键由 CODEX_HOME 的真实路径算出
-    （上游 login/src/auth/storage.rs:243-257），迁移或 restore 改变了真实路径，Codex 再也找不到旧条目。
+    （上游 login/src/auth/storage.rs:310-321），迁移或 restore 改变了真实路径，Codex 再也找不到旧条目。
 
     relogin_command：提示用户重新登录的命令。默认是迁移后的 `codex-<名> login`；
     restore 之后启动命令已被删除，调用方传 `codex login`。
@@ -463,8 +463,12 @@ def _step_move(journal: dict) -> None:
     _enter_step("move")
     if journal["mode"] == MODE_RENAME:
         try:
-            os.rename(source, target)
+            platform.retry_on_sharing_violation("migrate-move", os.rename, source, target)
         except OSError as exc:
+            if platform.is_sharing_violation(exc):
+                # 只在 Windows：改名被占用时数据一点没动，与占用检查不通过同样处理——放弃、不回滚、不留记录。
+                _delete_journal()
+                raise MigrationStop(accounts.EXIT_BUSY, platform.in_use_message(source, exc))
             if exc.errno != errno.EXDEV:
                 raise
             # 跨设备无法 rename：先把模式写进记录再复制，中断后续跑才会按 copy 规则处理。
@@ -539,7 +543,15 @@ def _step_park(journal: dict, verified_this_run: bool) -> None:
             remove_path(journal["target"])
             _set_phase(journal, PHASE_PLANNED)
             return
-    os.rename(journal["source"], journal["backup"])
+    try:
+        platform.retry_on_sharing_violation("migrate-park", os.rename, journal["source"], journal["backup"])
+    except OSError as exc:
+        if not platform.is_sharing_violation(exc):
+            raise
+        # 只在 Windows：S 没动，T 只是副本；先删副本再删记录，中途被杀时记录还在、续跑能接着清理。
+        remove_path(journal["target"])
+        _delete_journal()
+        raise MigrationStop(accounts.EXIT_BUSY, platform.in_use_message(journal["source"], exc))
     _test_hook("rename-backup")
     _set_phase(journal, PHASE_PARKED)
     _test_hook("journal-parked")
@@ -597,7 +609,7 @@ def _rollback(journal: dict) -> int:
     try:
         if journal["mode"] == MODE_RENAME and source_state == KIND_MISSING and target_exists \
                 and not backup_exists:
-            os.rename(journal["target"], journal["source"])
+            platform.retry_on_sharing_violation("migrate-rollback", os.rename, journal["target"], journal["source"])
             _delete_journal()
             info("rolled back: {} restored".format(journal["source"]))
         elif journal["mode"] == MODE_COPY and source_state == KIND_DIR and not backup_exists:
@@ -615,8 +627,11 @@ def _rollback(journal: dict) -> int:
             info("no automatic rollback in this state; rerun the same command to continue")
             _print_state(journal)
     except Exception as exc:  # noqa: BLE001 —— 回滚失败必须保留事务记录并报告现场
-        error("rollback failed: {}: {}".format(type(exc).__name__, exc), phase="rollback",
-              path=journal["source"])
+        detail = "rollback failed: {}: {}".format(type(exc).__name__, exc)
+        if platform.is_sharing_violation(exc):
+            # 只在 Windows：补上占用原因，用户关掉占用程序后重跑同一命令续做回滚。
+            detail += "; " + platform.in_use_message(getattr(exc, "filename", None) or journal["source"], exc)
+        error(detail, phase="rollback", path=journal["source"])
         _print_state(journal)
     return accounts.EXIT_ERROR
 
@@ -630,7 +645,7 @@ def _finish_rollback(journal: dict) -> None:
     """
     source, target, backup = journal["source"], journal["target"], journal["backup"]
     if entry_kind(source) == KIND_MISSING and entry_kind(backup) != KIND_MISSING:
-        os.rename(backup, source)
+        platform.retry_on_sharing_violation("migrate-rollback-restore", os.rename, backup, source)
         _test_hook("rollback-restore")
     if entry_kind(source) != KIND_DIR or entry_kind(backup) != KIND_MISSING:
         raise MigrationStop(accounts.EXIT_ERROR, "cannot finish the rollback automatically")

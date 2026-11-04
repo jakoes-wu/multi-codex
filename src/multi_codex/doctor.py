@@ -6,7 +6,6 @@
 
 import os
 import re
-import shutil
 import subprocess
 from typing import List, NamedTuple, Optional, Tuple
 
@@ -65,7 +64,8 @@ def run_checks() -> List[Check]:
 
 
 def _check_codex() -> Check:
-    path = shutil.which("codex")
+    # platform.which：Windows 上不查当前目录，只认 PATH 里能找到的 codex
+    path = platform.which("codex")
     if path is None:
         return Check("codex", FAIL, "codex was not found in PATH", "install Codex CLI and put it on PATH")
     try:
@@ -103,6 +103,16 @@ def _check_migration() -> Check:
     if restore:
         return Check("migration", FAIL, "unfinished restore of {}".format(restore["name"]),
                      "multi-codex restore {}".format(restore["name"]))
+    # Windows 上 use 中断留下的记录（POSIX 不写）；doctor 只报告，不删记录
+    try:
+        switched = switch.load_use_journal()
+    except switch.RestoreJournalError as exc:
+        return Check("migration", FAIL, str(exc), "check ~/.codex, then delete {}".format(switch.use_journal_path()))
+    if switched:
+        name = switch.use_journal_account(switched)
+        return Check("migration", FAIL, "interrupted switch: ~/.codex -> {} was being replaced by {}; run "
+                     "multi-codex use {}".format(switched["old_target"], switched["new_target"], name),
+                     "multi-codex use {}".format(name))
     return Check("migration", OK, "no unfinished migration or restore")
 
 
@@ -183,7 +193,7 @@ def _check_account(config, name: str) -> Tuple[Check, Optional[identity.Identity
     elif found.login == identity.LOGIN_KEYRING:
         problems.append("credentials are in the system keyring (cli_auth_credentials_store = {!r}); "
                         "the login cannot be read from files".format(found.store))
-    if os.path.islink(os.path.join(directory, "sessions")):
+    if platform.is_link(os.path.join(directory, "sessions")):
         problems.append("sessions is a link; local usage data may belong to another account")
     if problems:
         return Check(check_id, WARN, "; ".join(problems), hint), found

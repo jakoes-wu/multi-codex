@@ -1,4 +1,4 @@
-"""生成 bash / zsh / fish 的补全脚本（feature-cli-ergonomics §5.1.1）。
+"""生成 bash / zsh / fish / PowerShell 的补全脚本（feature-cli-ergonomics §5.1.1）。
 
 子命令、选项、哪些选项带值，都在生成时从 argparse 解析器读出，新增选项不必另外维护列表。
 账号名在补全时调用 `multi-codex completion --list-accounts` 动态读取。
@@ -16,7 +16,7 @@ from typing import Dict, List, Tuple
 ACCOUNT_COMMANDS = ("add", "set", "rename", "login", "proxy", "remove", "migrate-default", "run", "path", "env",
                     "usage", "use", "restore", "bind", "code", "app", "sessions")
 MULTI_ACCOUNT_COMMANDS = ("usage",)
-SHELLS = ("bash", "zsh", "fish")
+SHELLS = ("bash", "zsh", "fish", "powershell")
 
 
 def command_spec(parser: argparse.ArgumentParser) -> Dict[str, Tuple[List[str], List[str]]]:
@@ -249,6 +249,82 @@ def fish_script(spec: Dict[str, Tuple[List[str], List[str]]]) -> str:
     return "\n".join(lines)
 
 
+def _ps_quote(text: str) -> str:
+    # PowerShell 单引号串里只有 ' 需要写成 ''
+    return "'" + text.replace("'", "''") + "'"
+
+
+def _ps_array(items: List[str]) -> str:
+    return "@(" + ", ".join(_ps_quote(item) for item in items) + ")"
+
+
+def _ps_table(spec: Dict[str, Tuple[List[str], List[str]]], index: int) -> List[str]:
+    return ["        {} = {}".format(_ps_quote(name), _ps_array(spec[name][index]))
+            for name in sorted(spec) if spec[name][index]]
+
+
+def powershell_script(spec: Dict[str, Tuple[List[str], List[str]]]) -> str:
+    """PowerShell 补全（feature-windows-support §5.1.9），数参数位置的规则与 bash 版相同。
+
+    只含 ASCII：Windows PowerShell 5.1 按系统代码页读不带 BOM 的脚本，非 ASCII 字符会乱码。
+    补全器什么都不返回时 PowerShell 退回文件名补全，与 bash 的 -o default 一致。
+    """
+    return "\n".join([
+        "# multi-codex PowerShell completion. Install with:",
+        "#   multi-codex completion powershell | Out-String | Add-Content $PROFILE",
+        "Register-ArgumentCompleter -Native -CommandName multi-codex, multi-codex.exe -ScriptBlock {",
+        "    param($wordToComplete, $commandAst, $cursorPosition)",
+        "    $commands = {}".format(_ps_array(sorted(spec))),
+        "    $options = @{",
+    ] + _ps_table(spec, 0) + [
+        "    }",
+        "    $valueOptions = @{",
+    ] + _ps_table(spec, 1) + [
+        "    }",
+        "    $accountCommands = {}".format(_ps_array(list(ACCOUNT_COMMANDS))),
+        "    $shells = {}".format(_ps_array(list(SHELLS))),
+        "    # Words fully typed before the cursor; the first one is the command name itself",
+        "    $before = @($commandAst.CommandElements | Where-Object { $_.Extent.EndOffset -lt $cursorPosition } |",
+        "        ForEach-Object { $_.Extent.Text })",
+        "    $cmd = ''",
+        "    $npos = 0",
+        "    $skip = $false",
+        "    foreach ($w in ($before | Select-Object -Skip 1)) {",
+        "        if ($cmd -eq '') {",
+        "            if (-not $w.StartsWith('-')) { $cmd = $w }",
+        "            continue",
+        "        }",
+        "        if (($cmd -eq 'run' -or $cmd -eq 'login') -and $w -eq '--') { return }",
+        "        if ($skip) { $skip = $false; continue }",
+        "        if ($w.StartsWith('-')) {",
+        "            if ($valueOptions[$cmd] -contains $w) { $skip = $true }",
+        "        } else {",
+        "            $npos++",
+        "        }",
+        "    }",
+        "    $candidates = @()",
+        "    if ($cmd -eq '') {",
+        "        $candidates = $commands",
+        "    } elseif ($skip) {",
+        "        return",
+        "    } elseif ($wordToComplete.StartsWith('-')) {",
+        "        $candidates = $options[$cmd]",
+        "    } else {",
+        "        if (($accountCommands -contains $cmd) -and ($npos -eq 0 -or $cmd -eq 'usage')) {",
+        "            $candidates = @(multi-codex completion --list-accounts 2>$null)",
+        "        }",
+        "        if ($cmd -eq 'proxy' -and $npos -eq 1) { $candidates = @('off', 'inherit') }",
+        "        if ($cmd -eq 'completion' -and $npos -eq 0) { $candidates = $shells }",
+        "    }",
+        "    $candidates | Where-Object { $_ -and $_.StartsWith($wordToComplete, "
+        "[System.StringComparison]::OrdinalIgnoreCase) } |",
+        "        ForEach-Object { [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_) }",
+        "}",
+        "",
+    ])
+
+
 def script(shell: str, parser: argparse.ArgumentParser) -> str:
     spec = command_spec(parser)
-    return {"bash": bash_script, "zsh": zsh_script, "fish": fish_script}[shell](spec)
+    return {"bash": bash_script, "zsh": zsh_script, "fish": fish_script,
+            "powershell": powershell_script}[shell](spec)

@@ -120,12 +120,35 @@ def _create_link(source: str, link: str):
 
 def _replace_link(source: str, link: str):
     def run() -> None:
-        os.unlink(link)
+        platform.remove_link(link)
         platform.create_link(source, link)
     return run
 
 
 def _unlink(link: str):
     def run() -> None:
-        os.unlink(link)
+        # Windows 上目录共享是 junction，os.unlink 删不掉；remove_link 只删链接本身
+        platform.remove_link(link)
     return run
+
+
+def file_links_needed(actions: List[Action]) -> List[str]:
+    """动作里会新建 / 改建的“文件”链接（Windows 上文件只能用符号链接，可能没有权限）。
+
+    plan_shared 把 reason 写成 `-> <共享条目>`；指向目录的条目在 Windows 上建 junction，不需要权限，不计入。
+    """
+    needed = []
+    for action in actions:
+        if action.kind != "shared-link" or action.status not in (CREATE, UPDATE):
+            continue
+        if not action.reason or not action.reason.startswith("-> "):
+            continue
+        if not os.path.isdir(action.reason[3:]):
+            needed.append(os.path.basename(action.path))
+    return needed
+
+
+def file_link_message(what: str, items: List[str]) -> str:
+    return ("cannot create {} on Windows: {}; or exclude {} with "
+            "`multi-codex set NAME --shared-exclude ITEM`; nothing was changed".format(
+                what, platform.LINK_PERMISSION_HINT, ", ".join(sorted(set(items)))))

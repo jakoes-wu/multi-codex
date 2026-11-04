@@ -7,7 +7,7 @@
 [![PyPI](https://img.shields.io/pypi/v/multi-codex)](https://pypi.org/project/multi-codex/)
 ![Python](https://img.shields.io/badge/python-3.8%2B-blue)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
-![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey)
+![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)
 
 在同一台机器上同时使用多个 [Codex CLI](https://github.com/openai/codex) 账号。每个账号有自己的登录、配置和历史记录，还可以有自己的代理；不用再反复退出、重新登录。
 
@@ -39,7 +39,7 @@ codex            -> ~/.codex，它本身也可以迁移成其中一个账号
 
 **电脑需要的工具**：
 
-- macOS 或 Linux。Windows 支持在计划中；WSL 内按 Linux 使用。
+- macOS、Linux 或 Windows（原生 Windows 用 pipx 安装，见 [Windows](#windows)）。WSL 内按 Linux 使用。
 - Python 3.8 及以上。只用标准库，不需要 `pip install` 任何包。
 - `tar`，以及 `curl` 或 `wget`。
 - `PATH` 中能找到 Codex CLI，即 `codex --version` 能运行。通过 npm 安装的 Codex 需要 Node.js 16 及以上。
@@ -76,6 +76,27 @@ echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
 fish 用户改为执行一次 `fish_add_path ~/.local/bin`。
 
 从克隆的仓库安装、用 pipx 安装、装到其它目录，以及下载包如何校验，见“更多安装方式”一节。
+
+### Windows
+
+原生 Windows 上在 PowerShell 里用 pipx 安装（install.sh 只用于 macOS 和 Linux），Codex 用 npm 安装：
+
+```powershell
+npm install -g @openai/codex
+pipx install multi-codex
+pipx ensurepath                 # 之后新开一个终端
+multi-codex --version
+```
+
+启动命令是 `~/.local/bin`（即 `%USERPROFILE%\.local\bin`）下的 `codex-<名称>.cmd`；multi-codex 的配置放在 `%APPDATA%\multi-codex`。目录用 junction 链接，不需要额外权限。Windows 上的限制：
+
+- **共享文件需要开发者模式。** 共享 `AGENTS.md` 这类文件要建文件符号链接，Windows 只在开启开发者模式（设置 → 系统 → 开发者选项）或以管理员运行时允许。没有权限时，`add --shared` 和 `set --shared` 会停下并提示 `nothing was changed`；开启开发者模式，或用 `multi-codex set NAME --shared-exclude ITEM` 排除该文件。共享目录不受影响。
+- **按 Ctrl+C 会问“终止批处理操作吗(Y/N)?”。** 启动命令是 `.cmd` 文件，Codex 退出后 cmd 会这样问，回答 `Y` 即可。
+- **参数里的特殊字符。** 在 cmd 里调用 `codex-<名称>` 时，cmd 会先解释参数里的 `& | > < ^ %`；请加引号，或在 PowerShell 里调用。`codex.cmd` 旁边找不到 npm 包的 `codex.js` 时，multi-codex 只能直接运行 `codex.cmd`，这些字符同样可能被 cmd 改写。其它 `.cmd` / `.bat` 目标也一样，例如 `run NAME -- some.cmd`，以及 `multi-codex code` 用到的 `code.cmd`。
+- **路径里有 `"`、`%` 或 `!`。** 账号名、Python 或 multi-codex 的路径含这些字符时，无法安全写出 `.cmd` 启动命令；`add`、`apply` 报冲突（退出码 3），不做任何改动。
+- **切换前要关掉 Codex。** 只要有 Codex 进程在运行（`codex.exe`，或运行 npm 包的 `node.exe`），不论属于哪个账号，`use`、`restore`、`migrate-default` 都会拒绝（退出码 4）。
+- **续聊命令要在 PowerShell 里运行。** `multi-codex sessions` 给出的命令需粘贴到 PowerShell。
+- `multi-codex app` 只支持 macOS。
 
 ## 快速开始
 
@@ -181,7 +202,7 @@ multi-codex migrate-default
 | `multi-codex env 名称 [KEY=VALUE ...] [--unset KEY] [--clear]` | 列出或修改账号的额外环境变量 |
 | `multi-codex use [名称] [--skip-process-check]` | 显示或切换默认账号（`~/.codex` 指向的账号） |
 | `multi-codex restore 名称 [--skip-process-check] [--accept-relogin]` | 撤销 `migrate-default`：把账号移回 `~/.codex` |
-| `multi-codex completion bash\|zsh\|fish` | 输出 shell 补全脚本 |
+| `multi-codex completion bash\|zsh\|fish\|powershell` | 输出 shell 补全脚本 |
 
 所有写命令都支持 `--dry-run`。`init`、`add`、`set`、`rename`、`proxy`、`remove`、`apply`、`bind`、`unbind`、`env` 只打印有变化的项（没有变化时输出 `already up to date`），加 `-v` / `--verbose` 时连没变的项也打印。`list` 的 `-v` 含义不同，表示输出完整表格。`list`、`usage`、`sessions`、`doctor` 不会修改任何东西；加 `--json` 时，stdout 上只输出一个 JSON 对象（带 `"version": 1` 字段），警告仍写到 stderr。脚本请使用 `--json`：表格格式不保证稳定。
 
@@ -250,6 +271,8 @@ eval "$(multi-codex completion bash)"     # 写进 ~/.bashrc
 eval "$(multi-codex completion zsh)"      # 写进 ~/.zshrc，放在 compinit 之后
 multi-codex completion fish | source      # 写进 ~/.config/fish/config.fish
 ```
+
+PowerShell（Windows）里执行一次，写进配置文件：`multi-codex completion powershell | Out-String | Add-Content $PROFILE`。
 
 可以补全子命令、选项和已登记的账号名（包括邮箱形式的名字）。
 

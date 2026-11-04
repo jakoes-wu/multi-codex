@@ -276,7 +276,10 @@ def _string_field(data: dict, key: str, default: str, source: str) -> str:
 
 def _valid_item(item: object) -> bool:
     # 共享条目只能是账号目录下的一级名称，不能带路径分隔符或指向上级目录。
-    return isinstance(item, str) and item not in ("", ".", "..") and "/" not in item
+    if not (isinstance(item, str) and item not in ("", ".", "..") and "/" not in item):
+        return False
+    # Windows 上 \ 也是路径分隔符，: 会被解释成盘符或备用数据流，同样不能出现在条目名里。
+    return not (platform.IS_WINDOWS and ("\\" in item or ":" in item))
 
 
 def _parse_account(name: str, value: object, source: str) -> Account:
@@ -331,9 +334,11 @@ def validate_env_key(key: object) -> None:
     if not isinstance(key, str) or not ENV_KEY_PATTERN.match(key):
         raise ValueError("invalid environment variable name {!r}: use letters, digits and '_', "
                          "not starting with a digit".format(key))
-    if key == "CODEX_HOME":
+    # Windows 的环境变量名不区分大小写，codex_home、Http_Proxy 与保留名是同一个变量；POSIX 仍区分大小写。
+    folded = key.upper() if platform.IS_WINDOWS else key
+    if folded == "CODEX_HOME":
         raise ValueError("CODEX_HOME is managed by multi-codex and cannot be set per account")
-    if key in PROXY_ENV_VARS:
+    if folded in (PROXY_ENV_VARS if not platform.IS_WINDOWS else [name.upper() for name in PROXY_ENV_VARS]):
         raise ValueError("{} is a proxy variable; use `multi-codex proxy` for proxy settings".format(key))
 
 

@@ -16,6 +16,8 @@ import time
 from datetime import datetime
 from typing import Dict, Iterable, List, NamedTuple, Optional, Tuple
 
+from . import platform
+
 STORE_FILE = "file"
 STORE_KEYRING = "keyring"
 STORE_AUTO = "auto"
@@ -64,7 +66,15 @@ class Identity(NamedTuple):
 
 
 def _system_config_path() -> str:
-    return os.environ.get(SYSTEM_CONFIG_ENV) or SYSTEM_CONFIG
+    override = os.environ.get(SYSTEM_CONFIG_ENV)
+    if override:
+        return override
+    if platform.IS_WINDOWS:
+        # 上游 Windows 取 FOLDERID_ProgramData 下的 OpenAI\Codex\config.toml（f2b94ef 的 config/src/loader/mod.rs：
+        # :84 默认 C:\ProgramData，:808-818 windows_codex_system_dir，:836-840 windows_system_config_toml_file）；
+        # ProgramData 环境变量是它的近似，未设置时用系统默认位置。
+        return os.path.join(os.environ.get("ProgramData", r"C:\ProgramData"), "OpenAI", "Codex", "config.toml")
+    return SYSTEM_CONFIG
 
 
 def _read_store_key(path: str) -> Optional[str]:
