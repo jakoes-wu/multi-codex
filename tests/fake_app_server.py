@@ -93,5 +93,7 @@ def main():
 
 
 if __name__ == "__main__":
-    signal.signal(signal.SIGPIPE, signal.SIG_DFL)
+    # Windows 没有 SIGPIPE，直接设置会让假 app-server 一启动就 AttributeError 退出，Windows 用例全部测错路径。
+    if hasattr(signal, "SIGPIPE"):
+        signal.signal(signal.SIGPIPE, signal.SIG_DFL)
     main()
