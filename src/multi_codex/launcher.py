@@ -1,20 +1,27 @@
-"""启动命令 `<bin_dir>/codex-<名称>` 的生成与识别。
+"""启动命令 `<bin_dir>/codex-<名称>`（Windows 为 `codex-<名称>.cmd`）的生成与识别。
 
 启动命令是由 config.json 推导出的产物，内容完全由 (账号名, 账号目录, 代理, 环境变量) 决定，
 所以“内容相同即 unchanged”就是幂等判断。第 2 行的受管标记用来区分本工具生成的文件
 和用户自己的同名文件：没有标记的文件一律不覆盖、不删除。
 """
 
+import ntpath
 import os
 import shlex
 import stat
-from typing import Dict, Optional
+import sys
+from typing import Dict, List, Optional, Sequence, Tuple
+
+from . import platform
 
 from .config import PROXY_ENV_VARS, PROXY_INHERIT, PROXY_OFF, is_socks
 from .fsutil import KIND_FILE, entry_kind, read_text
 from .platform import ISOLATION_BREAKING_ENV
 
 MARKER_PREFIX = "# managed-by: multi-codex account="
+# Windows .cmd 启动命令的受管标记：把 MARKER_PREFIX 的 `# ` 换成 cmd 的注释 `rem `
+WIN_MARKER_PREFIX = "rem managed-by: multi-codex account="
+WIN_SUFFIX = ".cmd"
 LAUNCHER_PREFIX = "codex-"
 LAUNCHER_MODE = 0o755
 # 设置了账号环境变量的启动命令只允许本人读写执行：值里可能有 API key。
@@ -27,7 +34,8 @@ _NO_PROXY_HOSTS = "localhost,127.0.0.1,::1"
 
 
 def launcher_path(bin_dir: str, name: str) -> str:
-    return os.path.join(bin_dir, LAUNCHER_PREFIX + name)
+    suffix = WIN_SUFFIX if platform.IS_WINDOWS else ""
+    return os.path.join(bin_dir, LAUNCHER_PREFIX + name + suffix)
 
 
 def launcher_mode(env: Optional[Dict[str, str]]) -> int:
@@ -40,7 +48,11 @@ def launcher_file_ok(path: str, content: str, env: Optional[Dict[str, str]]) -> 
     没有环境变量时只要求内容相同且可执行，与 0.3.0 一样不比较权限位：用户手工改成 0775，
     或 bin_dir 所在文件系统忽略 chmod 时，不应被反复判为需要重写。
     有环境变量时还要求组和其他用户没有任何权限，否则密钥会被其他用户读到。
+    Windows 上只比较内容：Python 按只读属性合成权限位，组与其他用户位总是置上，比较权限位会让有 env 的账号
+    永远被判为需要重写；.cmd 不含密钥，也不需要权限位保护。
     """
+    if platform.IS_WINDOWS:
+        return read_text(path) == content
     if read_text(path) != content or not os.access(path, os.X_OK):
         return False
     if env:
@@ -134,10 +146,12 @@ def managed_account(path: str) -> Optional[str]:
     content = read_text(path)
     if content is None:
         return None
+    # 按扩展名选标记：.cmd 认 rem 写法；POSIX 启动命令没有扩展名，行为不变
+    prefix = WIN_MARKER_PREFIX if path.lower().endswith(WIN_SUFFIX) else MARKER_PREFIX
     lines = content.split("\n", 2)
-    if len(lines) < 2 or not lines[1].startswith(MARKER_PREFIX):
+    if len(lines) < 2 or not lines[1].startswith(prefix):
         return None
-    return lines[1][len(MARKER_PREFIX):].strip() or None
+    return lines[1][len(prefix):].strip() or None
 
 
 def scan_managed(bin_dir: str) -> Dict[str, str]:
@@ -150,8 +164,184 @@ def scan_managed(bin_dir: str) -> Dict[str, str]:
     for entry in sorted(names):
         if not entry.startswith(LAUNCHER_PREFIX):
             continue
+        # Windows 上只扫 .cmd：同目录里可能还有用户自己的同名无扩展名文件
+        if platform.IS_WINDOWS and not entry.lower().endswith(WIN_SUFFIX):
+            continue
         path = os.path.join(bin_dir, entry)
         account = managed_account(path)
         if account is not None:
             found[account] = path
     return found
+
+
+# ---- Windows 启动命令（方案 §5.1.3）：.cmd 只调用隐藏子命令 launch，环境在 Python 里构造 ----
+
+# cmd 里有特殊含义、无法在 .cmd 里安全转义的字符
+CMD_UNSAFE_CHARS = ('"', "%", "!", "\n", "\r")
+# 含非 ASCII 的路径优先改写成以这些变量开头：cmd 展开变量时用的是 Unicode 值，不经过代码页，
+# 中文用户名（C:\Users\张三）下 pipx 的默认目录因此也能写进 .cmd
+_CMD_PATH_VARS = ("LOCALAPPDATA", "APPDATA", "USERPROFILE")
+
+
+def entry_script() -> str:
+    """Windows 启动命令调用的入口脚本：包目录里的 _entry.py（见该文件说明为何不用 `-m`）。"""
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "_entry.py")
+
+
+def windows_command_paths() -> Tuple[str, str]:
+    """写进 .cmd 启动命令的 (Python 路径, 入口脚本路径)。"""
+    return _cmd_path(sys.executable), _cmd_path(entry_script())
+
+
+def _is_ascii(text: str) -> bool:
+    return all(ord(char) < 128 for char in text)
+
+
+def _cmd_path(path: str) -> str:
+    """cmd 按控制台代码页读 .cmd，含非 ASCII 字符的路径会读成乱码，只有这时才改写路径。
+
+    纯 ASCII 路径原样写入：短名（如 SITE-P~1）会让 _entry.py 看到的包目录与实际加载的长路径对不上。
+    非 ASCII 时先试 `%USERPROFILE%` 这类变量开头的写法（非 ASCII 只在用户名里时成立），不成立再换 8.3 短名。
+    """
+    if _is_ascii(path):
+        return path
+    variable = _env_var_form(path)
+    if variable is not None:
+        return variable
+    from . import winapi
+    return winapi.short_path(path)
+
+
+def _env_var_form(path: str) -> Optional[str]:
+    """path 位于某个 _CMD_PATH_VARS 目录下、且余下部分是纯 ASCII 时，返回 `%变量%` 加余下部分；否则 None。
+
+    取最长的匹配目录（LOCALAPPDATA 在 USERPROFILE 之下）。含 `!` 的变量值不用：用户打开了 cmd 的延迟展开时，
+    展开后的 `!` 仍会被解析。
+    """
+    best = None
+    for name in _CMD_PATH_VARS:
+        value = os.environ.get(name, "").rstrip("\\/")
+        if not value or not ntpath.isabs(value) or "!" in value:
+            continue
+        prefix = ntpath.normcase(value) + "\\"
+        if not ntpath.normcase(path).startswith(prefix):
+            continue
+        # 按原始变量值的长度切：个别字符转小写后会变长，按 prefix 的长度切会多切掉字符
+        rest = path[len(value) + 1:]
+        if _is_ascii(rest) and (best is None or len(value) > best[0]):
+            best = (len(value), "%{}%\\{}".format(name, rest))
+    return best[1] if best else None
+
+
+def _without_var_prefix(value: str) -> str:
+    """去掉 _cmd_path 加上的 `%变量%` 开头，剩下的部分才需要按字符规则检查。"""
+    for name in _CMD_PATH_VARS:
+        token = "%{}%".format(name)
+        if value.startswith(token):
+            return value[len(token):]
+    return value
+
+
+def cmd_unsafe_reason(values: List[str], commands: Sequence[str] = ()) -> Optional[str]:
+    """values / commands 里有 .cmd 无法安全写入的字符时返回说明，否则返回 None。
+
+    commands 是 cmd 真正要执行的路径（Python 与入口脚本）：cmd 按控制台代码页读 .cmd，非 ASCII 字符会被读错，
+    所以它们还必须是纯 ASCII（调用方已先改写 / 取短名）。values 只出现在 `rem` 注释行里，不限非 ASCII。
+    """
+    commands = [_without_var_prefix(value) for value in commands]
+    for value in list(values) + commands:
+        for char in CMD_UNSAFE_CHARS:
+            if char in value:
+                return "path {!r} contains {!r}, which cannot be written safely into a .cmd launcher".format(
+                    value, char)
+    for value in commands:
+        if not _is_ascii(value):
+            return ("path {!r} has non-ASCII characters and no 8.3 short name, so cmd.exe cannot run it from a "
+                    ".cmd launcher; reinstall multi-codex with pipx under a path without them".format(value))
+    return None
+
+
+def windows_unsafe_reason(name: str) -> Optional[str]:
+    """账号 name 的 .cmd 启动命令能否安全生成；_plan_launcher、_plan_router 与 launcher_status 共用。"""
+    return cmd_unsafe_reason([name], windows_command_paths())
+
+
+def render_windows(name: str, python: str, entry: str) -> str:
+    """生成 Windows 的 `codex-<名称>.cmd`。
+
+    必须用 `-I` 运行脚本而不是 `-m`：`-m` 会把当前目录放进模块搜索路径，用户在含 json.py 之类文件的项目里
+    启动时，这些文件会顶替标准库被执行。内容只由账号名与 python / entry 路径决定，不含 CODEX_HOME、代理、
+    账号环境变量（也就不含密钥）：launch 每次运行时读配置，账号设置改了不必重写 .cmd。
+    """
+    return "\n".join([
+        "@echo off",
+        WIN_MARKER_PREFIX + name,
+        '"{}" -I "{}" launch {} -- %*'.format(python, entry, name),
+        "exit /b %ERRORLEVEL%",
+        "",
+    ])
+
+
+def _drop_all_cases(env: Dict[str, str], names: Sequence[str]) -> None:
+    wanted = {name.upper() for name in names}
+    for key in [key for key in env if key.upper() in wanted]:
+        del env[key]
+
+
+def _inherited_no_proxy(env: Dict[str, str]) -> str:
+    """继承的 NO_PROXY 原值。真实 Windows 环境不区分大小写；base 是普通 dict 且含多种写法时以大写为准，
+    没有大写键时取按键名排序的第一个。"""
+    if "NO_PROXY" in env:
+        return env["NO_PROXY"]
+    for key in sorted(env):
+        if key.upper() == "NO_PROXY":
+            return env[key]
+    return ""
+
+
+def account_env(name: str, account_dir: str, proxy: str, env: Optional[Dict[str, str]] = None,
+                base: Optional[Dict[str, str]] = None) -> Dict[str, str]:
+    """Windows 上运行账号 codex 的完整环境，逐条对应 sh 版 render 的语义（name 只用于对照，不进环境）。
+
+    正确性靠 POSIX 上与 sh 实跑结果的对照测试保证（tests/test_windows.py 的 render 对照用例）；
+    改了 render 或 _proxy_lines 的语义，这里要同步改，否则 Windows 与 macOS·Linux 的账号环境会不一致。
+    """
+    result = dict(os.environ if base is None else base)
+    result["CODEX_HOME"] = account_dir
+    _drop_all_cases(result, ISOLATION_BREAKING_ENV)
+    if proxy == PROXY_OFF:
+        _drop_all_cases(result, _PROXY_VARS)
+    elif proxy != PROXY_INHERIT:
+        # 先读 NO_PROXY 原值再删：Windows 进程环境不区分大小写，sh 版对 no_proxy 的单独追加在这里合并为一次
+        inherited = _inherited_no_proxy(result)
+        _drop_all_cases(result, _PROXY_VARS)
+        result["HTTPS_PROXY"] = proxy
+        result["HTTP_PROXY"] = proxy
+        if is_socks(proxy):
+            result["ALL_PROXY"] = proxy
+        result["NO_PROXY"] = inherited + "," + _NO_PROXY_HOSTS if inherited else _NO_PROXY_HOSTS
+    # 账号自己设的变量最后写，可以覆盖上面的值；按排序写大写键，同名后写覆盖先写，与 sh 版依次 export 一致
+    for key in sorted(env or {}):
+        _drop_all_cases(result, [key])
+        result[key.upper()] = (env or {})[key]
+    return result
+
+
+def resolve_command(argv: List[str], env: Dict[str, str]) -> Optional[List[str]]:
+    """把要运行的命令解析成可直接交给 CreateProcess 的参数表；找不到命令返回 None。
+
+    npm 装的 codex 是 codex.cmd：交给 cmd.exe 时参数里的 & | > < ^ % 会被 cmd 改写或执行。旁边有
+    node_modules\\@openai\\codex\\bin\\codex.js 时直接用 node 运行它，参数按 MSVC 规则原样到达。
+    其它 .cmd / .bat 目标只能交给 cmd，限制写在 README。
+    """
+    full = platform.which(argv[0], path=env.get("PATH", ""))
+    if full is None:
+        return None
+    directory = os.path.dirname(full)
+    if os.path.basename(full).lower() == "codex.cmd":
+        script = os.path.join(directory, "node_modules", "@openai", "codex", "bin", "codex.js")
+        local_node = os.path.join(directory, "node.exe")
+        node = local_node if os.path.isfile(local_node) else platform.which("node", path=env.get("PATH", ""))
+        if node and os.path.isfile(script):
+            return [node, script] + list(argv[1:])
+    return [full] + list(argv[1:])

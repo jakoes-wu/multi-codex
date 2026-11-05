@@ -14,7 +14,7 @@
 import os
 from typing import Dict, FrozenSet, Iterable, List, Optional, Sequence, Set, Union
 
-from . import launcher, router, shared
+from . import launcher, platform, router, shared
 from .actions import (CONFLICT, CREATE, DELETE, SKIP, UNCHANGED, UPDATE, Action, error,
                       has_conflict, info, print_action)
 from .config import Account, Config, config_path, dump_config, save_config
@@ -178,7 +178,15 @@ def _make_private_dir(directory: str) -> None:
 def _plan_launcher(bin_dir: str, name: str, directory: str, proxy: str,
                    env: Optional[Dict[str, str]] = None) -> List[Action]:
     path = launcher.launcher_path(bin_dir, name)
-    content = launcher.render(name, directory, proxy, env)
+    if platform.IS_WINDOWS:
+        # python 或入口路径没法安全写进 .cmd 时按冲突处理（退出 3），不生成一个运行不了的启动命令
+        unsafe = launcher.windows_unsafe_reason(name)
+        if unsafe is not None:
+            return [Action(CONFLICT, "launcher", path, unsafe)]
+        python, entry = launcher.windows_command_paths()
+        content = launcher.render_windows(name, python, entry)
+    else:
+        content = launcher.render(name, directory, proxy, env)
     mode = launcher.launcher_mode(env)
     kind = entry_kind(path)
     if kind == KIND_MISSING:
@@ -214,7 +222,13 @@ def _plan_router(old_bin: str, new_bin: str, new: Config, planned_deletes: Set[s
         return actions + [Action(CONFLICT, "launcher", path,
                                  "codex-auto is generated from directory bindings; rename the account named {!r} "
                                  "(multi-codex rename {} NEW) or remove the bindings".format(owner.name, owner.name))]
-    content = router.render(new)
+    if platform.IS_WINDOWS:
+        unsafe = launcher.windows_unsafe_reason(router.ROUTER_NAME)
+        if unsafe is not None:
+            return actions + [Action(CONFLICT, "launcher", path, unsafe)]
+        content = router.render_windows(*launcher.windows_command_paths())
+    else:
+        content = router.render(new)
     write = _write_launcher(path, content, router.ROUTER_MODE)
     if entry_kind(path) == KIND_MISSING or router.same_file(path, planned_deletes):
         return actions + [Action(CREATE, "launcher", path, run=write)]
@@ -269,6 +283,12 @@ def execute(old: Config, new: Config, actions: List[Action], *, dry_run: bool, v
         return EXIT_CONFLICT
     if dry_run:
         return EXIT_OK
+    # Windows 上没有权限建文件链接时，在写任何东西之前停下：否则配置已写入、共享却建了一半
+    if platform.IS_WINDOWS:
+        needed = shared.file_links_needed(actions)
+        if needed and not platform.can_create_file_link():
+            error(shared.file_link_message("file links", needed), phase="shared-link")
+            return EXIT_ERROR
     config_action = actions[0]
     if config_action.changes:
         try:
@@ -308,5 +328,11 @@ def launcher_status(config: Config, name: str) -> str:
     if owner is None or owner.casefold() != name.casefold():
         return "conflict"
     env = account.env if account else {}
+    if platform.IS_WINDOWS:
+        # 在 missing 判断之后：.cmd 缺失且路径不安全时 list 显示 missing、apply 返回 3
+        if launcher.windows_unsafe_reason(name) is not None:
+            return "conflict"
+        expected = launcher.render_windows(name, *launcher.windows_command_paths())
+        return "ok" if launcher.launcher_file_ok(path, expected, env) else "stale"
     expected = launcher.render(name, account_dir(config, name), account.proxy if account else "inherit", env)
     return "ok" if launcher.launcher_file_ok(path, expected, env) else "stale"

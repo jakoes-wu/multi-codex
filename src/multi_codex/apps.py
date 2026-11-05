@@ -11,8 +11,9 @@
 
 import os
 import plistlib
-import shutil
 from typing import Optional
+
+from . import platform
 
 from .config import Config
 from .fsutil import expand
@@ -52,8 +53,9 @@ def desktop_log(config: Config, dir_name: str) -> str:
 
 
 def find_code(override: Optional[str]) -> Optional[str]:
-    candidate = override or shutil.which("code")
-    if candidate and os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+    candidate = override or platform.which("code")
+    # Windows 没有可执行权限位（code 是 code.cmd），只要求是文件；POSIX 仍要求可执行。
+    if candidate and os.path.isfile(candidate) and (platform.IS_WINDOWS or os.access(candidate, os.X_OK)):
         return candidate
     return None
 

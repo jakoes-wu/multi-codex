@@ -16,6 +16,7 @@ from typing import Dict, List, Optional
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SRC = os.path.join(ROOT, "src")
+IS_WINDOWS = os.name == "nt"
 
 # --version 与 app-server 供 doctor、usage --live 的测试使用；其它调用照旧记录参数与环境变量。
 FAKE_CODEX = """#!/bin/sh
@@ -29,6 +30,27 @@ fi
 printf '%s\\n' "$@" > "$FAKE_CODEX_OUT.args"
 env > "$FAKE_CODEX_OUT.env"
 """
+
+# Windows 上没有 sh：假 codex 写成 Python 脚本，外包一层 codex.cmd；行为与上面的 sh 版相同。
+FAKE_CODEX_PY = """import os
+import subprocess
+import sys
+
+args = sys.argv[1:]
+if args[:1] == ["--version"]:
+    print("codex-cli " + os.environ.get("FAKE_CODEX_VERSION", "0.159.2"))
+    sys.exit(0)
+if args[:1] == ["app-server"]:
+    sys.exit(subprocess.call([os.environ["FAKE_PYTHON"], os.environ["FAKE_APP_SERVER"]]))
+out = os.environ["FAKE_CODEX_OUT"]
+with open(out + ".args", "w") as handle:
+    handle.write("".join(arg + "\\n" for arg in args))
+with open(out + ".env", "w") as handle:
+    handle.write("".join("{}={}\\n".format(key, value) for key, value in os.environ.items()))
+"""
+
+# Windows 子进程必须保留的系统变量：缺 SystemRoot 时 Python 自身和 system_program 都会失败。
+_WINDOWS_KEEP_ENV = ("SystemRoot", "SYSTEMROOT", "windir", "PATHEXT", "COMSPEC", "TEMP", "TMP")
 
 
 class Result(object):
@@ -51,10 +73,17 @@ class CliTestCase(unittest.TestCase):
         self.fakebin = os.path.join(self.tmp, "fb")
         os.makedirs(self.home)
         os.makedirs(self.fakebin)
-        codex = os.path.join(self.fakebin, "codex")
-        with open(codex, "w") as handle:
-            handle.write(FAKE_CODEX)
-        os.chmod(codex, 0o755)
+        if IS_WINDOWS:
+            script = os.path.join(self.tmp, "fake_codex.py")
+            with open(script, "w") as handle:
+                handle.write(FAKE_CODEX_PY)
+            with open(os.path.join(self.fakebin, "codex.cmd"), "w") as handle:
+                handle.write('@"{}" "{}" %*\r\n'.format(sys.executable, script))
+        else:
+            codex = os.path.join(self.fakebin, "codex")
+            with open(codex, "w") as handle:
+                handle.write(FAKE_CODEX)
+            os.chmod(codex, 0o755)
         self.fake_out = os.path.join(self.tmp, "codex-out")
         self.env = {
             "HOME": self.home,
@@ -68,6 +97,19 @@ class CliTestCase(unittest.TestCase):
             "FAKE_APP_SERVER": os.path.join(ROOT, "tests", "fake_app_server.py"),
         }
         self.state = os.path.join(self.home, ".config", "multi-codex")
+        if IS_WINDOWS:
+            # 同时隔离 USERPROFILE / APPDATA / LOCALAPPDATA / ProgramData（ProgramData 只在测试里覆盖）。
+            system_root = os.environ.get("SystemRoot") or os.environ.get("SYSTEMROOT") or r"C:\Windows"
+            self.env["PATH"] = os.pathsep.join([self.fakebin, os.path.join(system_root, "System32")])
+            self.env["USERPROFILE"] = self.home
+            self.env["APPDATA"] = os.path.join(self.home, "AppData", "Roaming")
+            self.env["LOCALAPPDATA"] = os.path.join(self.home, "AppData", "Local")
+            self.env["ProgramData"] = os.path.join(self.tmp, "pd")
+            self.env.pop("LC_ALL")
+            for key in _WINDOWS_KEEP_ENV:
+                if key in os.environ:
+                    self.env[key] = os.environ[key]
+            self.state = os.path.join(self.env["APPDATA"], "multi-codex")
         self.root = os.path.join(self.home, ".cx")
         self.bin = os.path.join(self.home, ".local", "bin")
         self.addCleanup(self._cleanup)
@@ -100,7 +142,8 @@ class CliTestCase(unittest.TestCase):
         for suffix in (".args", ".env"):
             if os.path.exists(self.fake_out + suffix):
                 os.unlink(self.fake_out + suffix)
-        proc = subprocess.run([os.path.join(self.bin, "codex-" + name)] + list(args), env=full_env,
+        launcher = os.path.join(self.bin, "codex-" + name) + (".cmd" if IS_WINDOWS else "")
+        proc = subprocess.run([launcher] + list(args), env=full_env,
                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
         received_args: List[str] = []
         received_env: Dict[str, str] = {}
@@ -123,12 +166,19 @@ class CliTestCase(unittest.TestCase):
             if not os.path.lexists(root):
                 result[root] = ("missing",)
                 continue
+            # 锁文件与状态目录本身是加锁时建出的工具内部记录，不算“用户可见的改动”；
+            # 状态目录里的 config.json 与迁移事务记录仍然参与比较。
+            # 状态目录的祖先目录也是加锁时顺带建出的：Windows 上状态目录是 home\AppData\Roaming\multi-codex，
+            # 要一直排除到 root 下的 AppData 为止，否则“什么都没改”的断言会因这两级新目录失败。
+            skipped = {os.path.join(self.state, "lock"), self.state, os.path.dirname(self.state)}
+            ancestor = os.path.dirname(self.state)
+            while ancestor.startswith(root + os.sep):
+                skipped.add(ancestor)
+                ancestor = os.path.dirname(ancestor)
             for dirpath, dirnames, filenames in os.walk(root):
                 for name in dirnames + filenames + [""]:
                     path = os.path.join(dirpath, name) if name else dirpath
-                    # 锁文件与状态目录本身是加锁时建出的工具内部记录，不算“用户可见的改动”；
-                    # 状态目录里的 config.json 与迁移事务记录仍然参与比较。
-                    if path in (os.path.join(self.state, "lock"), self.state, os.path.dirname(self.state)):
+                    if path in skipped:
                         continue
                     st = os.lstat(path)
                     if stat.S_ISLNK(st.st_mode):

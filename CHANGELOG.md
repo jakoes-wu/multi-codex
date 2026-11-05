@@ -6,6 +6,13 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- Native Windows support (install with pipx): `codex-<name>.cmd` launchers and `codex-auto.cmd`, directory
+  links as junctions, a Codex process check for `use` / `restore` / `migrate-default`, retries when Windows
+  reports a file in use, `usage --live` ending the whole process tree, PowerShell resume commands and
+  `multi-codex completion powershell`; the platform badge now lists Windows. See the Windows section of the README for the limits.
+
 ### Changed
 
 - README: links in `README.md` are full URLs so they work on the PyPI project page (CI now checks

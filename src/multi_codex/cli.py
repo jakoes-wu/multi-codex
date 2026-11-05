@@ -10,6 +10,7 @@ import json
 import os
 import shlex
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -149,6 +150,8 @@ COMMAND_EXAMPLES: Dict[str, Tuple[Tuple[str, str], ...]] = {
         ("multi-codex completion zsh", "print the zsh script"),
         ("multi-codex completion bash", "print the bash script"),
         ("multi-codex completion fish", "print the fish script"),
+        # 示例须能被解析器整体接受且不超过 79 列；写进 $PROFILE 的完整命令放在 README 的补全一节。
+        ("multi-codex completion powershell", "print the PowerShell script"),
     ),
     "login": (
         ("multi-codex login work", "log in to \"work\""),
@@ -500,8 +503,19 @@ def _unknown_command(parser: argparse.ArgumentParser, argv: List[str]) -> Option
 
 
 def main(argv: Optional[List[str]] = None) -> int:
+    argv = list(sys.argv[1:] if argv is None else argv)
+    # 仅 Windows：.cmd 启动命令调用的隐藏子命令，不进 argparse、帮助与补全；POSIX 上照旧报 unknown command
+    if platform.IS_WINDOWS and argv[:1] == ["launch"]:
+        try:
+            return cmd_launch(argv[1:])
+        except ConfigError as exc:
+            error(str(exc), phase="config")
+            return accounts.EXIT_ERROR
+        except OSError as exc:
+            error("{}: {}".format(type(exc).__name__, exc))
+            return accounts.EXIT_ERROR
     parser = build_parser()
-    argv, run_command = _split_run_command(list(sys.argv[1:] if argv is None else argv))
+    argv, run_command = _split_run_command(argv)
     argv = _resolve_command_alias(argv)
     if not argv:
         # 不带任何参数：新用户最常见的第一次运行，给上手指引而不是 argparse 的“缺少 COMMAND”报错。
@@ -518,7 +532,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         return int(exc.code or 0)
 
     if not platform.is_supported():
-        error("this platform is not supported yet (macOS and Linux only)")
+        error("this platform is not supported yet (macOS, Linux and Windows only)")
         return accounts.EXIT_ERROR
 
     try:
@@ -602,6 +616,14 @@ def _blocked_by_migration(args: argparse.Namespace, notice: Optional[str]) -> bo
             args.command == "restore" and args.name.casefold() == journal["name"].casefold()):
         error("finish the unfinished restore first: rerun `multi-codex restore {}`".format(journal["name"]))
         return True
+    # Windows 上 use 中断在“旧链接已删、新链接未建”时，~/.codex 缺失：migrate-default 会把它判为源不存在。
+    # 其它写命令不涉及 ~/.codex，不拦；POSIX 不写这份记录。
+    if args.command == "migrate-default" and not args.dry_run:
+        interrupted = switch.load_use_journal()
+        if interrupted and entry_kind(expand(platform.default_source())) == KIND_MISSING:
+            error("a previous `use` was interrupted and ~/.codex is missing; run `multi-codex use {}` "
+                  "first".format(switch.use_journal_account(interrupted)))
+            return True
     return False
 
 
@@ -635,7 +657,9 @@ def dispatch(args: argparse.Namespace) -> int:
             new.shared_dir = args.shared_dir
         if args.shared_items is not None:
             items = [item.strip() for item in args.shared_items.split(",") if item.strip()]
-            if any(item in (".", "..") or "/" in item for item in items):
+            # Windows 上 `\` 也是路径分隔符、`:` 会被当成盘符或备用数据流，同样不能出现在条目名里
+            bad = "/\\:" if platform.IS_WINDOWS else "/"
+            if any(item in (".", "..") or any(char in item for char in bad) for item in items):
                 raise UsageError("--shared-items must be plain names without '/'")
             for item in items:
                 if is_unshareable(item):
@@ -1373,7 +1397,7 @@ def cmd_completion(args: argparse.Namespace, parser: argparse.ArgumentParser) ->
             print(name)
         return accounts.EXIT_OK
     if args.shell is None:
-        raise UsageError("completion needs a shell: bash, zsh or fish")
+        raise UsageError("completion needs a shell: bash, zsh, fish or powershell")
     sys.stdout.write(completion.script(args.shell, parser))
     return accounts.EXIT_OK
 
@@ -1413,6 +1437,8 @@ def cmd_run(name: Optional[str], command: List[str]) -> int:
     if account is None:
         error(config.not_registered(name))
         return accounts.EXIT_ERROR
+    if platform.IS_WINDOWS:
+        return _run_account_windows(config, account, command or ["codex"])
     argv, env = _account_exec_args(config, account, command or ["codex"])
     sys.stdout.flush()
     sys.stderr.flush()
@@ -1452,11 +1478,79 @@ def cmd_code(args: argparse.Namespace, extra: List[str]) -> int:
         warn("on macOS, `code` passes the whole environment (including this account's variables) to "
              "`open --env`, so the values are briefly visible in the process list")
     command = [code_bin, "--user-data-dir", data_dir] + ([args.path] if args.path else []) + extra
+    if platform.IS_WINDOWS:
+        # code.cmd 经 resolve_command 交给 cmd 解释，参数里的 cmd 特殊字符限制见 README
+        return _run_account_windows(config, account, command)
     argv, env = _account_exec_args(config, account, command)
     sys.stdout.flush()
     sys.stderr.flush()
     os.execve("/bin/sh", argv, env)
     return accounts.EXIT_ERROR
+
+
+# ---- Windows：run / code / login / launch 不经 /bin/sh（方案 §5.1.5） ----
+
+def _call_windows(env: dict, command: List[str]) -> int:
+    """在 env 下运行 command 并等它结束，返回它的退出码。找不到命令时报错退出 127（文案与 sh 版一致）。
+
+    密钥只在环境里，不出现在命令行。Ctrl+C 交给子进程自己处理：本进程忽略 SIGINT，免得先于 codex 退出。
+    """
+    argv = launcher.resolve_command(command, env)
+    if argv is None:
+        what = "codex" if command[0] == "codex" else command[0]
+        sys.stderr.write("multi-codex: {} not found in PATH\n".format(what))
+        return 127
+    sys.stdout.flush()
+    sys.stderr.flush()
+    previous = signal.signal(signal.SIGINT, signal.SIG_IGN)
+    try:
+        return subprocess.call(argv, env=env)
+    finally:
+        signal.signal(signal.SIGINT, previous)
+
+
+def _run_account_windows(config: Config, account: Account, command: List[str]) -> int:
+    """Windows 上以账号环境运行 command；环境由 launcher.account_env 构造，与 sh 版启动命令语义一致。"""
+    directory = accounts.account_dir(config, account.name)
+    if not os.path.isdir(directory):
+        sys.stderr.write("multi-codex: account directory does not exist: {}\n".format(directory))
+        return accounts.EXIT_ERROR
+    env = launcher.account_env(account.name, directory, account.proxy, account.env)
+    return _call_windows(env, command)
+
+
+def cmd_launch(argv: List[str]) -> int:
+    """隐藏子命令 `launch [NAME] -- ARGS...`：只在 Windows 上、只由 codex-<名>.cmd 与 codex-auto.cmd 调用。
+
+    在 argparse 之前拦截（main 开头）：用户传给 codex 的 -h、--version 不会被当成本工具的选项。
+    不带 NAME 时按目录绑定选账号，分支与文案逐条对应 sh 版 codex-auto（router.render）。
+    """
+    name = None
+    rest = list(argv)
+    if rest and rest[0] != "--":
+        name = rest.pop(0)
+    if not rest or rest[0] != "--":
+        sys.stderr.write("multi-codex: usage: multi-codex launch [NAME] -- ARGS...\n")
+        return accounts.EXIT_USAGE
+    args = rest[1:]
+    config, exists = load_config()
+    if name is None:
+        here = binding.normalize_dir(os.getcwd())
+        found = binding.resolve(config, here) if exists else None
+        if found is None:
+            sys.stderr.write("multi-codex: no account is bound to {} or its parents; running codex "
+                             "(the default account)\n".format(here))
+            return _call_windows(dict(os.environ), ["codex"] + args)
+        bound_dir, name = found
+        if config.find(name) is None:
+            sys.stderr.write("multi-codex: account {} bound to {} is not registered; run: multi-codex unbind "
+                             "{}\n".format(name, bound_dir, bound_dir))
+            return accounts.EXIT_ERROR
+    account = config.find(name) if exists else None
+    if account is None:
+        error(config.not_registered(name))
+        return accounts.EXIT_ERROR
+    return _run_account_windows(config, account, ["codex"] + args)
 
 
 def cmd_app(args: argparse.Namespace) -> int:
@@ -1694,12 +1788,32 @@ def _resume_command(source: _SessionSource, session: sessions.SessionInfo, tilde
     """续聊命令：先 cd 到会话启动时的目录，再用该账号的启动命令 resume；目录未知时只给后半段。
 
     tilde 为真时把主目录写成 ~，只用于给人看的文本输出；JSON 的 resume 字段保持绝对路径。
+    Windows 上给 PowerShell 写法（_resume_command_windows），README 写明需粘贴到 PowerShell 运行。
     """
+    if platform.IS_WINDOWS:
+        return _resume_command_windows(source, session)
     resume = "{} resume {}".format(source.launcher, session.session_id)
     if session.directory is None:
         return resume
     target = _tilde_path(session.directory) if tilde else shlex.quote(session.directory)
     return "cd {} && {}".format(target, resume)
+
+
+def _resume_command_windows(source: _SessionSource, session: sessions.SessionInfo) -> str:
+    """PowerShell 写法的续聊命令。目录不缩写成 ~：PowerShell 的 ~ 只在部分 cmdlet 里展开。
+
+    未登记的默认目录要清掉 CODEX_HOME 与隔离变量、且不改用户当前的 PowerShell 会话（$env:X=$null 会改），
+    所以交给 cmd 在它自己的进程里清：`set X=&` 只作用于这个 cmd 及其子进程。整串不含双引号，
+    避开 Windows PowerShell 5.1 向外部程序传带引号参数的已知问题；会话 id 是 UUID，不需要转义。
+    """
+    if source.registered:
+        resume = "{} resume {}".format(source.launcher, session.session_id)
+    else:
+        clears = "".join("set {}=& ".format(key) for key in ("CODEX_HOME",) + platform.ISOLATION_BREAKING_ENV)
+        resume = "cmd /d /c '{}codex resume {}'".format(clears, session.session_id)
+    if session.directory is None:
+        return resume
+    return "Set-Location '{}'; {}".format(session.directory.replace("'", "''"), resume)
 
 
 def _tilde_path(directory: str) -> str:

@@ -95,12 +95,17 @@ def use_account(config: Config, name: str, skip_process_check: bool, dry_run: bo
         error(config.not_registered(name), phase="use")
         return accounts.EXIT_ERROR
     target = accounts.account_dir(config, account.name)
+    # 上一次 use 在 Windows 上中断留下的记录（POSIX 不写，这里什么也不做）
+    code = recover_use_journal(dry_run)
+    if code is not None:
+        return code
     # 不跟随软链：账号目录本身是软链时，~/.codex 会变成“软链指向软链”，与 restore 的前提不一致。
     if entry_kind(target) != KIND_DIR:
         error("account directory is not a real directory", phase="use", path=target)
         return accounts.EXIT_ERROR
     link = default_link()
     kind = entry_kind(link)
+    current = None
     if kind == KIND_LINK:
         current = os.path.realpath(link)
         if current == os.path.realpath(target):
@@ -126,6 +131,15 @@ def use_account(config: Config, name: str, skip_process_check: bool, dry_run: bo
 
     if dry_run:
         info("(dry-run) would point ~/.codex at {}".format(target))
+        return accounts.EXIT_OK
+    if platform.IS_WINDOWS:
+        code = _use_windows(link, kind, current, target)
+        if code != accounts.EXIT_OK:
+            return code
+        info("default account is now {} (~/.codex -> {}); restart the Codex desktop app and IDE extensions".format(
+            account.name, target))
+        if os.environ.get("CODEX_HOME"):
+            warn("CODEX_HOME is set in this shell; running `codex` here ignores ~/.codex")
         return accounts.EXIT_OK
     temp_link = "{}.multi-codex-tmp.{}".format(link, os.getpid())
     try:
@@ -182,6 +196,10 @@ def _restore_state(config: Config, name: str, link: str, target: str,
 def restore_account(config: Config, config_exists: bool, name: str, skip_process_check: bool,
                     accept_relogin: bool, dry_run: bool) -> int:
     link = default_link()
+    # Windows 上 use 中断留下的记录：~/.codex 缺失时先建回旧链接，再按现有状态判断（POSIX 不写这份记录）
+    code = recover_use_journal(dry_run, for_restore=True)
+    if code is not None:
+        return code
     account = config.find(name)
     journal = load_restore_journal()
     # 账号已注销（状态 C 中途）时配置里查不到原名，用标记中记录的名字，用户输入的大小写不同也能续跑。
@@ -269,13 +287,18 @@ def restore_account(config: Config, config_exists: bool, name: str, skip_process
         }, indent=2, ensure_ascii=False) + "\n", mode=0o600)
         migrate._test_hook("restore-marked")
     if state in (STATE_A, STATE_A2):
-        os.unlink(link)
+        # Windows 上 ~/.codex 是 junction，要用 rmdir 删；POSIX 上 remove_link 就是 os.unlink
+        platform.remove_link(link)
         info("step=unlink {}".format(link))
         migrate._test_hook("restore-unlinked")
     if state in (STATE_A, STATE_A2, STATE_B):
         try:
-            os.rename(target, link)
+            platform.retry_on_sharing_violation("restore-rename", os.rename, target, link)
         except OSError as exc:
+            if platform.is_sharing_violation(exc):
+                # 只在 Windows：账号目录里的文件被其它程序打开着，关掉后重跑同一命令续做
+                error(platform.in_use_message(target, exc), phase="restore", path=link)
+                return accounts.EXIT_ERROR
             # 第 1、2 步之间有人运行了 codex，新建了非空的 ~/.codex。
             error("cannot move {} to ~/.codex ({}); move the new ~/.codex away and rerun "
                   "`multi-codex restore {}`".format(target, exc, canonical), phase="restore", path=link)
@@ -297,6 +320,134 @@ def restore_account(config: Config, config_exists: bool, name: str, skip_process
     info("restored {} to ~/.codex".format(canonical))
     if relogin_needed:
         info("log in again: codex login")
+    return accounts.EXIT_OK
+
+
+# ---- Windows 的 use 中断记录（方案 §5.1.8） ----
+# Windows 上 os.replace 不能覆盖已存在的 junction，use 只能先删旧链接再建新链接。旧目标只在内存里，
+# 删除后进程被杀就丢了，所以删之前先把它写进 use-journal.json；POSIX 走原子替换，不写这份记录。
+
+def use_journal_path() -> str:
+    return os.path.join(platform.state_dir(), "use-journal.json")
+
+
+def load_use_journal() -> Optional[dict]:
+    """读 use 中断记录；没有时返回 None。内容不完整按没有处理会丢掉旧目标，所以与 restore 标记一样报错。"""
+    path = use_journal_path()
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            journal = json.load(handle)
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError) as exc:
+        raise RestoreJournalError("cannot read the switch record {}: {}".format(path, exc))
+    if not isinstance(journal, dict) or any(not isinstance(journal.get(key), str)
+                                            for key in ("link", "old_target", "new_target")):
+        raise RestoreJournalError("the switch record {} is incomplete".format(path))
+    return journal
+
+
+def _delete_use_journal() -> None:
+    try:
+        os.unlink(use_journal_path())
+    except FileNotFoundError:
+        pass
+
+
+def use_journal_account(journal: dict, config: Optional[Config] = None) -> str:
+    """记录里 new_target 对应的已登记账号名，供提示用；找不到时写 NAME。"""
+    if config is None:
+        from .config import load_config
+        try:
+            config = load_config()[0]
+        except Exception:  # noqa: BLE001 —— 只用于生成提示文字，配置读不出时退回占位名
+            return "NAME"
+    owner = _registered_owner(config, os.path.realpath(journal["new_target"]))
+    return owner or "NAME"
+
+
+def recover_use_journal(dry_run: bool, for_restore: bool = False) -> Optional[int]:
+    """处理上一次 use 中断留下的记录；返回非 None 时调用方应以该退出码结束。只在记录存在时做事。
+
+    有 restore 标记时以 restore 为准：~/.codex 由 restore 的状态机负责，直接删掉 use 记录。
+    否则按 ~/.codex 的现状：缺失时 use 按“不存在”一路继续（成功后删记录），restore 先建回旧链接；
+    是链接说明中断发生在建链之后，删记录；是真实目录时 use 报错保留记录，restore 交给它自己的状态判断。
+    """
+    journal = load_use_journal()
+    if journal is None:
+        return None
+    link, old_target, new_target = journal["link"], journal["old_target"], journal["new_target"]
+    if dry_run:
+        info("(dry-run) would recover interrupted switch: ~/.codex -> {} (was being replaced by {})".format(
+            old_target, new_target))
+        return None
+    if load_restore_journal() is not None:
+        _delete_use_journal()
+        return None
+    kind = entry_kind(link)
+    if kind == KIND_LINK:
+        _delete_use_journal()
+        info("recovered interrupted switch: {} -> {}".format(old_target, new_target))
+        return None
+    if kind == KIND_MISSING:
+        if not for_restore:
+            # use 本次按 KIND_MISSING 直接建新链接，成功后再删记录
+            return None
+        try:
+            platform.create_link(old_target, link)
+        except OSError as exc:
+            error("cannot restore ~/.codex -> {} ({}); fix it, then rerun".format(old_target, exc),
+                  phase="use restore-old-link failed", path=link)
+            return accounts.EXIT_ERROR
+        _delete_use_journal()
+        info("recovered interrupted switch: {} -> {}".format(old_target, new_target))
+        return None
+    if for_restore:
+        return None
+    error("~/.codex was recreated as a directory while switching from {}; move it away, then rerun "
+          "multi-codex use {}".format(old_target, use_journal_account(journal)), phase="use", path=link)
+    return accounts.EXIT_ERROR
+
+
+def _use_windows(link: str, kind: str, current: Optional[str], target: str) -> int:
+    """Windows 上切换 ~/.codex：先删再建（junction 不能被 os.replace 覆盖），删之前写中断记录。"""
+    if kind == KIND_MISSING:
+        try:
+            platform.create_link(target, link)
+        except Exception as exc:  # noqa: BLE001 —— 建链失败时 ~/.codex 仍不存在，原样报错
+            error("{}: {}".format(type(exc).__name__, exc), phase="use", path=link)
+            return accounts.EXIT_ERROR
+        _delete_use_journal()
+        return accounts.EXIT_OK
+    assert current is not None
+    atomic_write(use_journal_path(), json.dumps({
+        "link": link, "old_target": current, "new_target": target,
+    }, indent=2, ensure_ascii=False) + "\n", mode=0o600)
+    try:
+        migrate._test_hook("use-remove")
+        platform.remove_link(link)
+    except (OSError, migrate.InjectedFailure) as exc:
+        _delete_use_journal()
+        error("cannot remove ~/.codex (winerror {}); nothing was changed".format(getattr(exc, "winerror", None)),
+              phase="use", path=link)
+        return accounts.EXIT_ERROR
+    migrate._test_hook("use-unlinked")
+    try:
+        migrate._test_hook("use-link")
+        platform.create_link(target, link)
+    except (OSError, migrate.InjectedFailure) as exc:
+        error("{}: {}".format(type(exc).__name__, exc), phase="use", path=link)
+        try:
+            platform.create_link(current, link)
+        except OSError as restore_exc:
+            error("{}; restore it by hand: mklink /J \"{}\" \"{}\"".format(restore_exc, link, current),
+                  phase="use restore-old-link failed", path=link)
+            info("phase=use restore-old-link failed path={} target={}".format(link, current))
+            return accounts.EXIT_ERROR
+        _delete_use_journal()
+        info("phase=use restore-old-link ok path={} target={}".format(link, current))
+        return accounts.EXIT_ERROR
+    _delete_use_journal()
     return accounts.EXIT_OK
 
 

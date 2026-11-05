@@ -7,7 +7,7 @@
 [![PyPI](https://img.shields.io/pypi/v/multi-codex)](https://pypi.org/project/multi-codex/)
 ![Python](https://img.shields.io/badge/python-3.8%2B-blue)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](https://github.com/jakoes-wu/multi-codex/blob/main/LICENSE)
-![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey)
+![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)
 
 Use several [Codex CLI](https://github.com/openai/codex) accounts on one machine, at the same time. Each account keeps its own login, settings, history and, if you like, its own proxy. No more logging out and in again.
 
@@ -39,7 +39,7 @@ The launchers are plain shell scripts. They keep working even if you uninstall m
 
 **Your computer**:
 
-- macOS or Linux. Windows support is planned; inside WSL, follow the Linux instructions.
+- macOS, Linux or Windows (native Windows: install with pipx, see [Windows](#windows)). Inside WSL, follow the Linux instructions.
 - Python 3.8 or newer. Only the standard library is used; no `pip install` is needed.
 - `tar`, and `curl` or `wget`.
 - The Codex CLI on your `PATH`: `codex --version` should work. The npm package needs Node.js 16 or newer.
@@ -76,6 +76,28 @@ echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
 In fish, run `fish_add_path ~/.local/bin` once instead.
 
 Installing from a clone, with pipx or into another directory, and how downloads are verified: see [More installation options](#more-installation-options).
+
+### Windows
+
+On native Windows, install with pipx from PowerShell (install.sh is for macOS and Linux), and install Codex with npm:
+
+```powershell
+npm install -g @openai/codex
+pipx install multi-codex
+pipx ensurepath                 # then open a new terminal
+multi-codex --version
+```
+
+Launchers are `codex-<name>.cmd` in `~/.local/bin` (`%USERPROFILE%\.local\bin`); multi-codex keeps its config in `%APPDATA%\multi-codex`. Directories are linked with junctions, which need no extra rights. Limits on Windows:
+
+- **Shared files need Developer Mode.** Linking a shared file such as `AGENTS.md` needs a file symbolic link, which Windows only allows with Developer Mode (Settings → System → For developers) or as administrator. Without it, `add --shared` and `set --shared` stop with `nothing was changed`; turn on Developer Mode, or exclude the file with `multi-codex set NAME --shared-exclude ITEM`. Shared directories work either way.
+- **Ctrl+C asks `Terminate batch job (Y/N)?`.** The launchers are `.cmd` files, so cmd asks this after Codex exits; answer `Y`.
+- **Special characters in arguments.** When you call `codex-<name>` from cmd, cmd interprets `& | > < ^ %` in the arguments first; quote them, or call the launcher from PowerShell. When the npm package's `codex.js` cannot be found next to `codex.cmd`, multi-codex runs `codex.cmd` itself, and the same characters may be changed by cmd. This also applies to other `.cmd` / `.bat` targets, such as `run NAME -- some.cmd` and `code.cmd` used by `multi-codex code`.
+- **Paths with `"`, `%` or `!`.** If the account name or the path of Python or multi-codex contains one of these, the `.cmd` launcher cannot be written safely; `add` and `apply` report a conflict (exit 3) and change nothing.
+- **Switching needs Codex closed.** `use`, `restore` and `migrate-default` refuse (exit 4) while any Codex process is running (`codex.exe`, or `node.exe` running the npm package), whichever account it belongs to.
+- **Keyring logins over SSH.** When Codex keeps the login in Windows Credential Manager (`cli_auth_credentials_store = "keyring"`), a launcher run from an SSH session with key authentication cannot read it and reports `ERROR_NO_SUCH_LOGON_SESSION`; this is a Windows restriction. Run it from the desktop, or store the login in a file (`cli_auth_credentials_store = "file"`) and log in again.
+- **Resume commands are for PowerShell.** The commands printed by `multi-codex sessions` must be pasted into PowerShell.
+- `multi-codex app` is macOS only.
 
 ## Quick start
 
@@ -181,7 +203,7 @@ More questions are answered in the [FAQ](#faq).
 | `multi-codex env NAME [KEY=VALUE ...] [--unset KEY] [--clear]` | List or change an account's extra environment variables. |
 | `multi-codex use [NAME] [--skip-process-check]` | Show or change the default account (where `~/.codex` points). |
 | `multi-codex restore NAME [--skip-process-check] [--accept-relogin]` | Undo `migrate-default`: move the account back to `~/.codex`. |
-| `multi-codex completion bash\|zsh\|fish` | Print a shell completion script. |
+| `multi-codex completion bash\|zsh\|fish\|powershell` | Print a shell completion script. |
 
 Every write command accepts `--dry-run`. `init`, `add`, `set`, `rename`, `proxy`, `remove`, `apply`, `bind`, `unbind` and `env` print only the items they change (or `already up to date`); `-v` / `--verbose` also prints unchanged items. For `list`, `-v` means the full table instead. `list`, `usage`, `sessions` and `doctor` never change anything; with `--json` they print a single JSON object on stdout (with a `"version": 1` field) and keep warnings on stderr. Use `--json` in scripts: the table layout is not guaranteed to stay the same.
 
@@ -232,6 +254,8 @@ eval "$(multi-codex completion bash)"     # in ~/.bashrc
 eval "$(multi-codex completion zsh)"      # in ~/.zshrc, after compinit
 multi-codex completion fish | source      # in ~/.config/fish/config.fish
 ```
+
+In PowerShell (Windows), add it to your profile once: `multi-codex completion powershell | Out-String | Add-Content $PROFILE`.
 
 Subcommands, options and registered account names (including e-mail addresses) are completed.
 

@@ -20,6 +20,8 @@ ROUTER_NAME = "auto"
 # 不以 launcher.MARKER_PREFIX（`… account=`）开头：managed_account 对入口返回 None，
 # 孤儿清理与 restore 的残留清理都不会把它当成账号启动命令。
 ROUTER_MARKER = "# managed-by: multi-codex router"
+# Windows codex-auto.cmd 的标记：ROUTER_MARKER 的 `# ` 换成 `rem `；同样不以 launcher.WIN_MARKER_PREFIX 开头
+WIN_ROUTER_MARKER = "rem managed-by: multi-codex router"
 ROUTER_MODE = 0o755  # 入口不含任何密钥，所有人可读
 
 
@@ -34,8 +36,21 @@ def is_router(path: str) -> bool:
     content = read_text(path)
     if content is None:
         return False
+    marker = WIN_ROUTER_MARKER if path.lower().endswith(launcher.WIN_SUFFIX) else ROUTER_MARKER
     lines = content.split("\n", 2)
-    return len(lines) >= 2 and lines[1] == ROUTER_MARKER
+    return len(lines) >= 2 and lines[1] == marker
+
+
+def render_windows(python: str, entry: str) -> str:
+    """生成 Windows 的 `codex-auto.cmd`。内容只和 python / entry 路径有关：选账号由 `launch` 每次运行时读配置完成，
+    绑定改了立即生效，不必重新 apply（与 sh 版把绑定写死进脚本不同，方案 §5.1.4）。"""
+    return "\n".join([
+        "@echo off",
+        WIN_ROUTER_MARKER,
+        '"{}" -I "{}" launch -- %*'.format(python, entry),
+        "exit /b %ERRORLEVEL%",
+        "",
+    ])
 
 
 def render(config: Config) -> str:

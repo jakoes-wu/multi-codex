@@ -11,6 +11,7 @@
 import calendar
 import glob
 import json
+import logging
 import os
 import queue
 import signal
@@ -22,9 +23,18 @@ from datetime import datetime
 from typing import Any, Dict, Iterator, List, NamedTuple, Optional, Tuple
 
 from . import __version__
+from . import platform
 
 SOURCE_LOCAL = "local"
 SOURCE_LIVE = "live"
+
+_LOG = logging.getLogger("multi_codex")
+
+# Windows：新进程组（taskkill /T 以它为树根）且不弹控制台窗口；值取自 Win32 文档，POSIX 上不用。
+_CREATE_NEW_PROCESS_GROUP = 0x00000200
+_CREATE_NO_WINDOW = 0x08000000
+# taskkill 本身卡住时不能让 usage 挂住，超时后放弃这一次结束动作。
+_TASKKILL_TIMEOUT_SEC = 10
 
 # 本地扫描上限：按修改时间从新到旧最多看这么多个会话文件，读到第一个含快照的文件就停。
 MAX_SCAN_FILES = 20
@@ -192,7 +202,7 @@ def _snapshot_in_file(path: str) -> Tuple[Optional[float], List[Limit]]:
 
 def local_snapshot(name: str, account_dir: str) -> UsageResult:
     """读一个账号最近一次的本地额度快照。没有任何快照时 ok 仍为 True、limits 为空（“暂无数据”）。"""
-    shared = os.path.islink(os.path.join(account_dir, "sessions"))
+    shared = platform.is_link(os.path.join(account_dir, "sessions"))
     for path in _candidate_files(account_dir):
         snapshot_time, limits = _snapshot_in_file(path)
         if limits:
@@ -216,7 +226,7 @@ def last_used(account_dir: str) -> Optional[float]:
         except OSError:
             continue
     history = os.path.join(account_dir, "history.jsonl")
-    if not os.path.islink(history):
+    if not platform.is_link(history):
         try:
             times.append(os.stat(history).st_mtime)
         except OSError:
@@ -238,16 +248,41 @@ class _AppServer(object):
         self.deadline = time.monotonic() + timeout_sec
         self.timeout_sec = timeout_sec
         self.stderr_file = tempfile.TemporaryFile()
+        # Windows 上 kill-on-close 的 Job Object 句柄；为空表示没建成，只靠 taskkill 结束进程树。
+        self.job: Optional[int] = None
         try:
-            self.proc = subprocess.Popen([launcher, "app-server"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                         stderr=self.stderr_file, start_new_session=True)
+            if platform.IS_WINDOWS:
+                # Windows 没有进程组信号：新进程组只为让 taskkill /T 有明确的树根，CREATE_NO_WINDOW 防止弹窗。
+                self.proc = subprocess.Popen([launcher, "app-server"], stdin=subprocess.PIPE,
+                                             stdout=subprocess.PIPE, stderr=self.stderr_file,
+                                             creationflags=_CREATE_NEW_PROCESS_GROUP | _CREATE_NO_WINDOW)
+            else:
+                self.proc = subprocess.Popen([launcher, "app-server"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                             stderr=self.stderr_file, start_new_session=True)
         except OSError:
             # 构造失败时调用方拿不到对象、不会调用 close()，临时文件在这里关掉。
             self.stderr_file.close()
             raise
+        if platform.IS_WINDOWS:
+            self._attach_job()
         self.lines: "queue.Queue[Optional[bytes]]" = queue.Queue()
         self.reader = threading.Thread(target=self._read_stdout, daemon=True)
         self.reader.start()
+
+    def _attach_job(self) -> None:
+        """把子进程放进 kill-on-close 的 Job Object：之后起的后代都进同一 job，close 时关句柄即全部结束。
+
+        Popen 与这一步之间起的孙进程不在 job 内，由 app-server 自带的 45 秒看门狗兜底。
+        失败（如父进程已在不允许嵌套的 job 里）只降级为仅用 taskkill，不报错。
+        """
+        from . import winapi
+        try:
+            if platform.test_hook_point("job-assign-failed"):
+                raise winapi.JobError(0, "injected job-assign-failed", None, 0)
+            self.job = winapi.create_kill_on_close_job(self.proc._handle)  # type: ignore[attr-defined]
+        except OSError as exc:
+            self.job = None
+            _LOG.debug("job object unavailable: winerror=%s", getattr(exc, "winerror", None))
 
     def _read_stdout(self) -> None:
         try:
@@ -311,13 +346,13 @@ class _AppServer(object):
                 except subprocess.TimeoutExpired:
                     graceful = False
             if not graceful:
-                self._signal_group(signal.SIGTERM)
+                self._terminate_group()
                 self._close_stdin()
                 give_up_at = time.monotonic() + _TERM_GRACE_SEC
                 while time.monotonic() < give_up_at and self._group_alive():
                     time.sleep(0.05)
-            # 包装器退出不代表它拉起的子进程也退出了；无论如何对整个进程组补一次 SIGKILL。
-            self._signal_group(signal.SIGKILL)
+            # 包装器退出不代表它拉起的子进程也退出了；无论如何对整个进程组补一次强制结束。
+            self._kill_group()
             try:
                 self.proc.wait(timeout=_GRACEFUL_EXIT_SEC)
             except subprocess.TimeoutExpired:
@@ -330,12 +365,50 @@ class _AppServer(object):
                 except OSError:
                     pass
             self.reader.join(timeout=1)
+            if self.job is not None:
+                from . import winapi
+                # kill-on-close：关句柄时系统结束 job 里仍在的全部进程，兜住 taskkill 漏掉的后代。
+                winapi.close_handle(self.job)
+                self.job = None
 
     def _close_stdin(self) -> None:
         try:
             self.proc.stdin.close()
         except OSError:
             pass
+
+    def _terminate_group(self) -> None:
+        """请整个进程树退出：POSIX 对进程组发 SIGTERM；Windows 没有可用的组信号，直接 taskkill /T /F。"""
+        if platform.IS_WINDOWS:
+            self._taskkill()
+        else:
+            self._signal_group(signal.SIGTERM)
+
+    def _kill_group(self) -> None:
+        """强制结束整个进程树。
+
+        Windows 上组长已退出就不再 taskkill：链上每层（cmd、launch 的 subprocess.call、codex.js）都等
+        子进程退出才退出，组长退出即整棵树已退出；漏网的后代由 Job Object 关句柄兜底。
+        """
+        if platform.IS_WINDOWS:
+            if self.proc.poll() is None:
+                self._taskkill()
+        else:
+            self._signal_group(signal.SIGKILL)
+
+    def _taskkill(self) -> None:
+        # 返回码 128（进程已不存在）和其它非 0 都只记日志不抛；超时同样放弃，close 不能因此挂住或报错。
+        command = [platform.system_program("taskkill.exe"), "/PID", str(self.proc.pid), "/T", "/F"]
+        try:
+            rc = subprocess.run(command, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL, timeout=_TASKKILL_TIMEOUT_SEC,
+                                creationflags=_CREATE_NO_WINDOW).returncode
+        except subprocess.TimeoutExpired:
+            rc = None
+        except OSError as exc:
+            _LOG.debug("taskkill failed: %s", exc)
+            return
+        _LOG.debug("taskkill rc=%s pid=%s", rc, self.proc.pid)
 
     def _signal_group(self, sig: int) -> None:
         try:
@@ -344,6 +417,8 @@ class _AppServer(object):
             pass
 
     def _group_alive(self) -> bool:
+        if platform.IS_WINDOWS:
+            return self.proc.poll() is None
         self.proc.poll()  # 回收已退出的组长，否则僵尸进程会让进程组看起来仍然存在
         try:
             os.killpg(self.proc.pid, 0)
