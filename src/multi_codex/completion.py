@@ -32,7 +32,8 @@ EXTRA_POSITIONAL = {("proxy", 1): ["off", "inherit"], ("clash-api", 0): ["auto",
 # 值是账号名或共享项名的选项；凡是带这个选项的子命令都适用（现为 add、set）。
 OPTION_SOURCES = {"--config-from": ACCOUNTS, "--shared-exclude": SHARED_ITEMS, "--shared-include": SHARED_ITEMS}
 
-_SAFE_WORD = re.compile(r"^[A-Za-z0-9._-]+$")
+# 不以 - 开头：补全脚本把以 - 开头的当前词当成选项名来补，这样的取值永远补不出来。
+_SAFE_WORD = re.compile(r"^[A-Za-z0-9._][A-Za-z0-9._-]*$")
 
 PositionalValues = Dict[Tuple[str, int], List[str]]
 OptionValues = Dict[Tuple[str, str], List[str]]
@@ -77,6 +78,11 @@ def value_spec(parser: argparse.ArgumentParser) -> Tuple[PositionalValues, Optio
                 if sub_action.help == argparse.SUPPRESS or isinstance(sub_action, argparse._HelpAction):  # noqa: SLF001
                     continue
                 if not sub_action.option_strings:
+                    # 一个位置参数吃多个值（nargs 为 + / * / 数字）时，取值表只登记在起始位置，后面几个值补不出来，
+                    # 所以干脆不支持；现在没有这种参数，将来要加时先扩展这里。
+                    if sub_action.choices and sub_action.nargs not in (None, "?"):
+                        raise ValueError("completion values for multi-value positional: {} {}".format(
+                            name, sub_action.dest))
                     if sub_action.choices:
                         positional[(name, index)] = _literal_words(sub_action.choices)
                     # nargs='*' 吃掉其后所有位置参数，不再给后面编号（现只有 usage 的账号列表，且排在最后）。
@@ -99,6 +105,11 @@ def value_spec(parser: argparse.ArgumentParser) -> Tuple[PositionalValues, Optio
         if (name in ACCOUNT_COMMANDS and index == 0) or name in MULTI_ACCOUNT_COMMANDS:
             raise ValueError("completion values overlap account position: {}:{}".format(name, index))
     return positional, option_values
+
+
+def is_plain_word(text: str) -> bool:
+    """补全现查出的名字（共享项名）能否原样当一个候选：不含空白，也不含 bash 的分词字符 = 和 :。"""
+    return bool(text) and not re.search(r"[\s=:'\"]", text)
 
 
 def _literal_words(choices) -> List[str]:

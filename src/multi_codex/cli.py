@@ -1513,7 +1513,9 @@ def cmd_completion(args: argparse.Namespace, parser: argparse.ArgumentParser) ->
                 print(name)
         if args.list_shared_items:
             for item in config.shared_items:
-                print(item)
+                # 名字含空白、= 或 : 时，bash 会把它拆成几段或重复已输入的前缀；这类名字不给候选，退回文件名补全。
+                if completion.is_plain_word(item):
+                    print(item)
         return accounts.EXIT_OK
     if args.shell is None:
         raise UsageError("completion needs a shell: bash, zsh, fish or powershell")

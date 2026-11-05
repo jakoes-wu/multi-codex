@@ -135,12 +135,17 @@ class CompletionTest(ErgonomicsBase):
     def test_unsafe_values_rejected(self):
         # 需要转义的词、与账号位置重合的取值表都在生成时报错，不写进脚本。
         from multi_codex import completion
-        for sub_name, choices in (("demo", ["a b"]), ("add", ["x", "y"])):
-            with self.subTest(sub=sub_name):
+        cases = (("demo", ["a b"], None), ("add", ["x", "y"], None), ("demo", ["-x"], None), ("demo", ["x"], "+"))
+        for sub_name, choices, nargs in cases:
+            with self.subTest(sub=sub_name, choices=choices, nargs=nargs):
                 parser = argparse.ArgumentParser(prog="multi-codex")
-                parser.add_subparsers(dest="command").add_parser(sub_name).add_argument("value", choices=choices)
+                demo = parser.add_subparsers(dest="command").add_parser(sub_name)
+                demo.add_argument("value", choices=choices, nargs=nargs)
                 with self.assertRaises(ValueError):
                     completion.value_spec(parser)
+        # 现查的共享项名含空白、= 或 : 时不给候选（bash 会拆开或重复前缀）。
+        self.assertEqual([completion.is_plain_word(item) for item in ("AGENTS.md", "a b", "a=b", "a:b")],
+                         [True, False, False, False])
 
     @unittest.skipUnless(shutil.which("zsh"), "zsh is not installed")
     def test_zsh_lookup(self):

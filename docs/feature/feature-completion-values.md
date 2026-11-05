@@ -76,7 +76,7 @@
   - `OPTION_SOURCES = {"--config-from": ACCOUNTS, "--shared-exclude": SHARED_ITEMS, "--shared-include": SHARED_ITEMS}`，对凡是含该选项的子命令生效（现为 `add`、`set`）。
 - `completion` 的 shell 名来自 argparse `choices`（`cli.py:363`），不再手写。
 
-取值顺序保持 `choices` 的声明顺序。手写表与 argparse 表冲突时以 argparse 为准（现无冲突）。取值里有需要转义的字符、或固定取值表与账号位置重合（四种 shell 合并方式不同）时，生成脚本直接报错（`ValueError`，不用 `assert`）。
+取值顺序保持 `choices` 的声明顺序。手写表与 argparse 表冲突时以 argparse 为准（现无冲突）。取值里有需要转义的字符或以 `-` 开头、一个位置参数吃多个值又带 `choices`、或固定取值表与账号位置重合（四种 shell 合并方式不同）时，生成脚本直接报错（`ValueError`，不用 `assert`）。`--list-shared-items` 不输出含空白、`=`、`:`、引号的共享项名（bash 会拆开或重复已输入的前缀），这类名字退回文件名补全。
 
 **候选决定顺序**（四种 shell 一致，扫描规则不变，只多记一个 `last_opt`）：
 
@@ -179,3 +179,4 @@ zsh：`zsh -n` 语法检查；`zsh -f -c 'autoload -U compinit; compinit -u; sou
 ## 10. 开放问题
 
 - README 建议 PowerShell 用户把脚本快照写进 `$PROFILE`（`Add-Content`），升级后不会自动更新。改成在 `$PROFILE` 里写 `multi-codex completion powershell | Out-String | Invoke-Expression`（与 bash / zsh 一样每次动态生成）可以避免，但每开一个 PowerShell 窗口要多起一次 Python。本方案不改，只在 README 提示升级后重新生成。
+- 选项缩写：argparse 接受唯一前缀（如 `--clash-t` 等于 `--clash-tun`），四种补全脚本的扫描只认完整写法，缩写后按 Tab 补出的是位置取值或文件名，不是 `on` / `off`。这是本次之前就有的扫描规则（数位置参数时同样不认缩写），不影响命令本身的执行；要支持需在四种 shell 里各加一段前缀匹配，本次不做（PR #43 评论提出，2026-11-05）。
