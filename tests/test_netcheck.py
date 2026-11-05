@@ -952,7 +952,8 @@ class ClashFindTest(NetCheckCliBase):
 
     def write_file(self, path, text):
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "w") as handle:
+        # 显式 UTF-8：Windows 默认按 cp1252 写，含中文注释的配置会写不进去；Clash 配置本身是 UTF-8。
+        with open(path, "w", encoding="utf-8") as handle:
             handle.write(text)
 
     def http(self, address):
