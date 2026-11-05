@@ -1,7 +1,7 @@
 """命令行入口：解析参数、加锁、组装新配置，再交给收敛引擎或迁移模块。
 
 退出码契约（方案 §5.2）：0 成功或已是目标状态；1 运行错误；2 参数不合法；
-3 存在冲突且未做任何修改；4 迁移源目录正被占用。
+3 存在冲突且未做任何修改；4 迁移源目录正被占用；5 启动前网络检查未通过、未启动任何程序。
 """
 
 import argparse
@@ -18,12 +18,13 @@ import unicodedata
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 
-from . import (__version__, accounts, apps, binding, completion, doctor, identity, launcher, migrate, platform,
-               sessions, shellpath, switch, usage)
+from . import (__version__, accounts, apps, binding, completion, doctor, identity, launcher, migrate,
+               platform, sessions, shellpath, switch, usage)
 from .actions import CREATE, DELETE, UNCHANGED, UPDATE, Action, error, hint, info, print_action, warn
-from .config import (DEFAULT_SHARED_DIR, DEFAULT_SHARED_ITEMS, Account, Config, ConfigError, is_socks,
-                     is_unshareable, load_config, normalize_proxy, parse_config, unique_items, validate_env_key,
-                     validate_env_value, validate_name)
+from .config import (DEFAULT_SHARED_DIR, DEFAULT_SHARED_ITEMS, NET_CHECK_LEVELS, Account, ClashApi, Config,
+                     ConfigError, is_socks, is_unshareable, load_config, normalize_clash_address, normalize_country,
+                     normalize_proxy, parse_config, unique_items, validate_env_key, validate_env_value,
+                     validate_name)
 from .config import _valid_item as valid_shared_item  # 与配置解析用同一条名称规则
 from .fsutil import KIND_DIR, KIND_MISSING, display_path, entry_kind, expand
 from .lock import LockBusyError, WriteLock
@@ -56,6 +57,7 @@ COMMAND_GROUPS = (
         ("code", "open VS Code for an account (experimental)"),
         ("app", "open the Codex desktop app for an account (macOS, experimental)"),
         ("proxy", "set the proxy of an account"),
+        ("netcheck", "set or test the pre-launch network check of an account"),
         ("path", "print an account's directory"),
         ("completion", "print a shell completion script"),
     )),
@@ -66,6 +68,7 @@ COMMAND_GROUPS = (
         ("restore", "undo migrate-default: move an account back to ~/.codex"),
         ("apply", "converge all accounts to the configuration"),
         ("init", "create or update the global settings"),
+        ("clash-api", "set the Clash / mihomo controller used by the network check"),
     )),
 )
 COMMAND_SUMMARY = {name: summary for _, commands in COMMAND_GROUPS for name, summary in commands}
@@ -111,6 +114,18 @@ COMMAND_EXAMPLES: Dict[str, Tuple[Tuple[str, str], ...]] = {
         ("multi-codex proxy work socks5://host:1080", "a SOCKS proxy"),
         ("multi-codex proxy work off", "unset the proxy variables"),
         ("multi-codex proxy work inherit", "keep your shell's proxy"),
+    ),
+    "netcheck": (
+        ("multi-codex netcheck work", "show the setting and test it"),
+        ("multi-codex netcheck work basic", "need the proxy port open"),
+        ("multi-codex netcheck work strict --country JP", "also exit country JP"),
+        ("multi-codex netcheck work off --clash off", "turn the check off"),
+    ),
+    "clash-api": (
+        ("multi-codex clash-api", "show the controller"),
+        ("multi-codex clash-api 127.0.0.1:9097", "set it"),
+        ("multi-codex clash-api 127.0.0.1:9097 --secret-stdin", "with a secret"),
+        ("multi-codex clash-api off", "clear it"),
     ),
     "rename": (
         ("multi-codex rename work client-a", "codex-work becomes codex-client-a"),
@@ -277,6 +292,18 @@ def build_parser() -> argparse.ArgumentParser:
     _add_dry_run(p_proxy)
     _add_verbose(p_proxy)
 
+    p_netcheck = sub.add_parser("netcheck", description=COMMAND_SUMMARY["netcheck"])
+    p_netcheck.add_argument("name")
+    p_netcheck.add_argument("level", nargs="?", choices=NET_CHECK_LEVELS,
+                            help="off: no proxy check; basic: the proxy port must be open; strict: also the exit "
+                                 "country, direct and through the proxy (omit: keep the current level)")
+    p_netcheck.add_argument("--country", metavar="CC",
+                            help="two-letter country code the strict level requires (default US)")
+    p_netcheck.add_argument("--clash", choices=("on", "off"),
+                            help="also require Clash / mihomo in global mode with TUN on")
+    _add_dry_run(p_netcheck)
+    _add_verbose(p_netcheck)
+
     p_rename = sub.add_parser("rename", description=COMMAND_SUMMARY["rename"])
     p_rename.add_argument("old", metavar="OLD")
     p_rename.add_argument("new", metavar="NEW")
@@ -390,6 +417,16 @@ def build_parser() -> argparse.ArgumentParser:
                            help="restore even though credentials are in the system keyring; "
                                 "you will need to log in again afterwards")
     _add_dry_run(p_restore)
+
+    p_clash = sub.add_parser("clash-api", description=COMMAND_SUMMARY["clash-api"])
+    p_clash.add_argument("address", nargs="?",
+                         help="HOST:PORT of external-controller, unix:/PATH, \\\\.\\pipe\\NAME (Windows), "
+                              "or off")
+    p_clash.add_argument("--secret-stdin", action="store_true",
+                         help="read the controller secret from one line of standard input; without it the "
+                              "secret is cleared")
+    _add_dry_run(p_clash)
+    _add_verbose(p_clash)
 
     # 示例统一在这里挂到每个子命令上，不改上面各处 add_parser；RawDescriptionHelpFormatter 让示例保持换行与对齐，
     # 选项说明仍照常自动折行（argparse 在输出帮助时才读 formatter_class 与 epilog，事后赋值有效）。
@@ -514,6 +551,17 @@ def main(argv: Optional[List[str]] = None) -> int:
         except OSError as exc:
             error("{}: {}".format(type(exc).__name__, exc))
             return accounts.EXIT_ERROR
+    # 两平台都接受的隐藏子命令：只由开启了网络检查的 POSIX 启动命令调用（launcher._net_check_lines），
+    # 不进 argparse、帮助与补全，账号名里的 - 开头等字符也不会被当成选项。
+    if argv[:1] == ["netgate"]:
+        try:
+            return cmd_netgate(argv[1:])
+        except ConfigError as exc:
+            error(str(exc), phase="config")
+            return accounts.EXIT_ERROR
+        except OSError as exc:
+            error("{}: {}".format(type(exc).__name__, exc))
+            return accounts.EXIT_ERROR
     parser = build_parser()
     argv, run_command = _split_run_command(argv)
     argv = _resolve_command_alias(argv)
@@ -546,10 +594,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         if args.command == "completion":
             return cmd_completion(args, parser)
         if args.command == "run":
-            return cmd_run(args.name, run_command)
+            return cmd_run(args.name, run_command, "run")
         if args.command == "login":
             # `--` 之后的参数原样交给 codex login，本工具不校验（取决于上游支持哪些参数）。
-            return cmd_run(args.name, ["codex", "login"] + run_command)
+            return cmd_run(args.name, ["codex", "login"] + run_command, "login")
         if args.command == "code":
             return cmd_code(args, run_command)
         if args.command == "app":
@@ -569,6 +617,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         # 以下两种只读模式不加锁，未完成的迁移或 restore 也不拦。
         if args.command == "env" and not (args.assignments or args.unset or args.clear):
             return cmd_env_list(args.name)
+        if args.command == "netcheck" and args.level is None and args.country is None and args.clash is None:
+            return cmd_netcheck_show(args.name)
+        if args.command == "clash-api" and args.address is None:
+            if args.secret_stdin:
+                raise UsageError("--secret-stdin needs an ADDRESS")
+            return cmd_clash_api_show()
         if args.command == "use" and args.name is None:
             return cmd_use_show()
         if args.command == "bind" and args.name is None:
@@ -709,6 +763,14 @@ def dispatch(args: argparse.Namespace) -> int:
             error(new.not_registered(args.name))
             return accounts.EXIT_ERROR
         account.proxy = _checked_proxy(args.value)
+    elif args.command == "netcheck":
+        account = new.find(_checked_name(args.name))
+        if account is None:
+            error(new.not_registered(args.name))
+            return accounts.EXIT_ERROR
+        _apply_netcheck_changes(new, account, args)
+    elif args.command == "clash-api":
+        new.clash_api = _clash_api_from_args(args)
     elif args.command == "rename":
         prepared = _rename_config(new, args)
         if isinstance(prepared, int):
@@ -780,6 +842,11 @@ def dispatch(args: argparse.Namespace) -> int:
     if args.command == "rename" and code == accounts.EXIT_OK and not args.dry_run:
         info("renamed {} to {}; directory {} is unchanged".format(
             args.old, args.new, display_path(accounts.account_dir(new, args.new))))
+    if args.command == "netcheck" and code == accounts.EXIT_OK and not args.dry_run:
+        changed = new.find(args.name)
+        if changed is not None:
+            info("network check of {}: {}".format(changed.name, _netcheck().scope_text(changed)
+                                                  if changed.net_check.active else "off"))
     # set 不新建账号，不需要“下一步登录”的提示。
     if args.command == "add" and code == accounts.EXIT_OK and not args.dry_run:
         _hint_after_setup(new, args.name, check_login=True)
@@ -1052,6 +1119,17 @@ def _load_apply_file(path: str, old: Config) -> Config:
             raw = handle.read()
     except OSError as exc:
         raise ConfigError("cannot read {}: {}".format(path, exc))
+    # Clash 接口地址与 secret 是本机状态（各机器的 Clash 配置不同）：先从原始 JSON 里拿掉再校验，
+    # 否则文件里另一个平台的地址（如在 macOS 上写了 \\.\pipe\…）会让整个 apply 校验失败。
+    clash_written = False
+    try:
+        document = json.loads(raw)
+    except ValueError:
+        document = None  # 不是合法 JSON，交给 parse_config 给出统一的报错
+    if isinstance(document, dict) and "clash_api" in document:
+        clash_written = True
+        del document["clash_api"]
+        raw = json.dumps(document)
     new = parse_config(raw, path)
     # parse_config 会给省略的 dir 填默认值，要判断文件里是否显式写了，只能看原始 JSON。
     raw_accounts = json.loads(raw).get("accounts", {})
@@ -1068,6 +1146,11 @@ def _load_apply_file(path: str, old: Config) -> Config:
             account.dir_name = current.dir_name
     # 绑定是本机状态，沿用当前值；文件中已删除的账号，它的绑定一并删除。
     new.bindings = dict(old.bindings)
+    # Clash 接口沿用当前值（见上）。
+    if clash_written:
+        warn("'clash_api' in {} is ignored; it is a setting of this machine, change it with "
+             "`multi-codex clash-api`".format(path))
+    new.clash_api = old.clash_api
     for name in set(new.bindings.values()):
         if new.find(name) is None:
             binding.drop_account(new, name)
@@ -1348,6 +1431,8 @@ def cmd_usage(args: argparse.Namespace) -> int:
         account = config.find(name)
         targets.append((name, account))
 
+    # 只读一次、不删除：逐账号调用 gate 会在第一个账号就删掉变量，后面的账号不再被跳过。
+    netcheck_skipped = _netcheck().skip_mode() is not None
     results = []
     for name, account in targets:
         if account is None:
@@ -1360,8 +1445,7 @@ def cmd_usage(args: argparse.Namespace) -> int:
                                            "launcher is {}; run `multi-codex apply` first".format(status),
                                            None, False, [])
             else:
-                result = usage.live_snapshot(account.name, launcher.launcher_path(expand(config.bin_dir),
-                                                                                  account.name), args.timeout)
+                result = _live_usage(config, account, netcheck_skipped, args.timeout)
         else:
             result = usage.local_snapshot(account.name, accounts.account_dir(config, account.name))
         results.append(result)
@@ -1373,6 +1457,24 @@ def cmd_usage(args: argparse.Namespace) -> int:
     if args.json:
         _print_json({"version": 1, "accounts": [usage.to_json(result) for result in results]})
     return accounts.EXIT_OK if all(result.ok for result in results) else accounts.EXIT_ERROR
+
+
+def _live_usage(config: Config, account: Account, netcheck_skipped: bool, timeout: float) -> usage.UsageResult:
+    """usage --live 的单个账号：先做该账号的启动前网络检查，未通过就不启动 app-server。
+
+    检查耗时不计入 --timeout（那是 app-server 的应答时限）；不打印 passed / skipped 行，失败写进该账号的结果。
+    账号目录不存在时不检查，让启动命令照原样报目录错误（与启动命令里“目录 → 检查”的顺序一致）。
+    """
+    checked = account.net_check.active
+    if checked and not netcheck_skipped and os.path.isdir(accounts.account_dir(config, account.name)):
+        failed = [result for result in _netcheck().run_checks(config, account, stop_on_failure=True) if not result.ok]
+        if failed:
+            return usage.UsageResult(account.name, usage.SOURCE_LIVE, False, "network check failed: {}: {}".format(
+                failed[0].item, failed[0].detail), None, False, [])
+    # 只给开启检查的账号注入：未开启的账号启动命令里没有 unset，注入的变量会被 Codex 继承。
+    env = dict(os.environ, **{_netcheck().SKIP_ENV: _netcheck().SKIP_QUIET}) if checked else None
+    return usage.live_snapshot(account.name, launcher.launcher_path(expand(config.bin_dir), account.name),
+                               timeout, env=env)
 
 
 def cmd_doctor(args: argparse.Namespace) -> int:
@@ -1415,10 +1517,11 @@ def _account_exec_args(config: Config, account: Account, command: List[str]) -> 
     return ["sh", "-c", 'eval "${}"'.format(launcher.RUN_SCRIPT_ENV), "sh"] + command, env
 
 
-def cmd_run(name: Optional[str], command: List[str]) -> int:
+def cmd_run(name: Optional[str], command: List[str], subcommand: str = "run") -> int:
     """在账号的环境下运行命令（默认 codex），成功时不返回：本进程被替换成 sh，再被替换成该命令。
 
     省略 name 时，从当前目录向上找最近一个绑定（feature-dir-binding §5.1.2）。
+    subcommand 是用户运行的子命令（run / login），只用于网络检查失败时拼出“本次跳过”的写法。
     """
     config, exists = load_config()
     if name is None:
@@ -1437,6 +1540,10 @@ def cmd_run(name: Optional[str], command: List[str]) -> int:
     if account is None:
         error(config.not_registered(name))
         return accounts.EXIT_ERROR
+    # 账号名确定之后才拼 hint：省略名字（按目录绑定）时 name 在上面才被填上。
+    gate_code = _net_gate(config, account, "multi-codex {} {}".format(subcommand, account.name))
+    if gate_code is not None:
+        return gate_code
     if platform.IS_WINDOWS:
         return _run_account_windows(config, account, command or ["codex"])
     argv, env = _account_exec_args(config, account, command or ["codex"])
@@ -1466,6 +1573,9 @@ def cmd_code(args: argparse.Namespace, extra: List[str]) -> int:
     config, account = _registered_with_dir(args.name)
     if account is None:
         return accounts.EXIT_ERROR
+    gate_code = _net_gate(config, account, "multi-codex code {}".format(account.name))
+    if gate_code is not None:
+        return gate_code
     code_bin = apps.find_code(args.bin)
     if code_bin is None:
         error("VS Code's `code` command was not found{}; install it from VS Code (\"Shell Command: Install "
@@ -1509,6 +1619,125 @@ def _call_windows(env: dict, command: List[str]) -> int:
         signal.signal(signal.SIGINT, previous)
 
 
+def _net_gate(config: Config, account: Account, hint: str) -> Optional[int]:
+    """启动前网络检查（feature-network-check §5.1.5）：返回 None 表示放行，否则返回调用方应直接返回的退出码。
+
+    未开启、或账号目录不存在时不检查：目录错误交给原有路径报告，与启动命令里“目录 → 检查 → codex”的顺序一致。
+    失败返回 EXIT_NETCHECK（5），此时没有启动任何程序；Ctrl+C 中断检查返回 130（与 shell 的 SIGINT 约定一致）。
+    """
+    if not account.net_check.active or not os.path.isdir(accounts.account_dir(config, account.name)):
+        return None
+    try:
+        failure = _netcheck().gate(config, account, hint)
+    except KeyboardInterrupt:
+        sys.stderr.write("multi-codex: network check interrupted\n")
+        return 130
+    if failure is None:
+        return None
+    sys.stderr.write(failure + "\n")
+    sys.stderr.flush()
+    return accounts.EXIT_NETCHECK
+
+
+def cmd_netgate(argv: List[str]) -> int:
+    """隐藏子命令 `netgate NAME`：开启网络检查的 POSIX 启动命令在启动 Codex 前调用，通过返回 0，未通过返回 5。"""
+    if len(argv) != 1:
+        sys.stderr.write("multi-codex: usage: multi-codex netgate NAME\n")
+        return accounts.EXIT_USAGE
+    config, exists = load_config()
+    account = config.find(argv[0]) if exists else None
+    if account is None:
+        error(config.not_registered(argv[0]))
+        return accounts.EXIT_ERROR
+    gate_code = _net_gate(config, account, "codex-" + account.name)
+    return accounts.EXIT_OK if gate_code is None else gate_code
+
+
+def _netcheck():
+    """延迟导入联网检查模块：它会带进 http.client、ssl 等，只有真正要检查或显示检查设置时才付这笔导入开销，
+    未开启检查的账号（Windows 上每次 `.cmd` 启动都经过 cli）启动速度不受影响。"""
+    from . import netcheck
+    return netcheck
+
+
+def cmd_netcheck_show(name: str) -> int:
+    """`netcheck NAME`：显示设置并立即检查一次，逐项列出（不在第一个失败处停下）。只读、不加锁。"""
+    config, exists = load_config()
+    account = config.find(_checked_name(name)) if exists else None
+    if account is None:
+        error(config.not_registered(name))
+        return accounts.EXIT_ERROR
+    if not account.net_check.active:
+        print("network check is off for {}".format(account.name))
+        return accounts.EXIT_OK
+    print("network check of {}: {}".format(account.name, _netcheck().scope_text(account)))
+    try:
+        results = _netcheck().run_checks(config, account, stop_on_failure=False)
+    except KeyboardInterrupt:
+        sys.stderr.write("multi-codex: network check interrupted\n")
+        return 130
+    for result in results:
+        print("{:<4} {} {} ({} ms)".format("ok" if result.ok else "fail", result.item, result.detail,
+                                           result.elapsed_ms))
+    return accounts.EXIT_OK if all(result.ok for result in results) else accounts.EXIT_NETCHECK
+
+
+def cmd_clash_api_show() -> int:
+    """`clash-api`：显示 Clash 接口设置；secret 只说有没有设置，不显示内容。"""
+    config, _ = load_config()
+    if config.clash_api is None:
+        print("Clash controller is not set")
+    else:
+        print("Clash controller: {} (secret {})".format(config.clash_api.address,
+                                                         "set" if config.clash_api.secret else "not set"))
+    return accounts.EXIT_OK
+
+
+def _apply_netcheck_changes(config: Config, account: Account, args: argparse.Namespace) -> None:
+    """按 netcheck 的写形态修改账号设置；按改完后的结果校验，不合法时抛 UsageError（退出 2）。"""
+    check = account.net_check
+    if args.level is not None:
+        check.level = args.level
+    if args.country is not None:
+        try:
+            check.country = normalize_country(args.country)
+        except ValueError as exc:
+            raise UsageError(str(exc))
+    if args.clash is not None:
+        check.clash = args.clash == "on"
+    if check.level in ("basic", "strict") and "://" not in account.proxy:
+        raise UsageError("the {} check needs a proxy, but the proxy of {} is {}; set one first, e.g. "
+                         "`multi-codex proxy {} 7901`".format(check.level, account.name, account.proxy, account.name))
+    if check.level == "strict" and account.proxy.startswith("https://"):
+        raise UsageError("the strict check does not support https:// proxies; use http:// or socks5://")
+    if args.country is not None and not check.active:
+        # 未开启的账号不保存检查设置（Account.to_dict 只在开启时写 net_check），明说一句，免得以为已记下。
+        warn("the network check of {} is off, so --country is not saved; turn it on with "
+             "`multi-codex netcheck {} strict --country {}`".format(account.name, account.name, check.country))
+    if check.clash and config.clash_api is None:
+        # 允许先设账号再设接口；启动时会失败并提示设置接口。
+        warn("the Clash controller is not set; launches of {} will be refused until you run "
+             "`multi-codex clash-api ADDRESS`".format(account.name))
+
+
+def _clash_api_from_args(args: argparse.Namespace) -> Optional[ClashApi]:
+    """clash-api 的写形态：返回新设置，off 返回 None。secret 只从标准输入读，不接受命令行参数（ps 可见）。"""
+    if args.address.lower() == "off":
+        if args.secret_stdin:
+            raise UsageError("--secret-stdin cannot be used with off")
+        return None
+    try:
+        address = normalize_clash_address(args.address)
+    except ValueError as exc:
+        raise UsageError(str(exc))
+    secret = ""
+    if args.secret_stdin:
+        secret = sys.stdin.readline().rstrip("\r\n")
+        if not secret:
+            raise UsageError("no secret was read from standard input")
+    return ClashApi(address, secret)
+
+
 def _run_account_windows(config: Config, account: Account, command: List[str]) -> int:
     """Windows 上以账号环境运行 command；环境由 launcher.account_env 构造，与 sh 版启动命令语义一致。"""
     directory = accounts.account_dir(config, account.name)
@@ -1550,6 +1779,10 @@ def cmd_launch(argv: List[str]) -> int:
     if account is None:
         error(config.not_registered(name))
         return accounts.EXIT_ERROR
+    # 经绑定选到的账号（codex-auto.cmd）同样在这里检查；上面未绑定、跑默认 codex 的分支不是账号，不检查。
+    gate_code = _net_gate(config, account, "codex-" + account.name)
+    if gate_code is not None:
+        return gate_code
     return _run_account_windows(config, account, ["codex"] + args)
 
 

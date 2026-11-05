@@ -188,6 +188,8 @@ More questions are answered in the [FAQ](#faq).
 | `multi-codex rename OLD NEW` | Rename an account and its launcher; the directory, login and links stay. |
 | `multi-codex login NAME [-- ARGS]` | Run `codex login` with an account's environment; arguments after `--` go to `codex login`. Does not need `~/.local/bin` on `PATH`. |
 | `multi-codex proxy NAME PORT\|URL\|off\|inherit` | Set an account's proxy. |
+| `multi-codex netcheck NAME [off\|basic\|strict] [--country CC] [--clash on\|off]` | Set the [pre-launch network check](#pre-launch-network-check) of an account; with only NAME, show it and run the checks now. |
+| `multi-codex clash-api [ADDRESS\|off] [--secret-stdin]` | Show or set the Clash / mihomo controller used by `netcheck --clash on`. |
 | `multi-codex remove NAME` | Unregister an account and delete its launcher. **The account directory is kept.** |
 | `multi-codex apply [-f FILE]` | Converge everything to the configuration (or to `FILE`). |
 | `multi-codex list [-v] [--json]` | Show accounts: who is logged in, proxy, sharing, usage, when last used and status. `-v` shows the full table. |
@@ -205,7 +207,7 @@ More questions are answered in the [FAQ](#faq).
 | `multi-codex restore NAME [--skip-process-check] [--accept-relogin]` | Undo `migrate-default`: move the account back to `~/.codex`. |
 | `multi-codex completion bash\|zsh\|fish\|powershell` | Print a shell completion script. |
 
-Every write command accepts `--dry-run`. `init`, `add`, `set`, `rename`, `proxy`, `remove`, `apply`, `bind`, `unbind` and `env` print only the items they change (or `already up to date`); `-v` / `--verbose` also prints unchanged items. For `list`, `-v` means the full table instead. `list`, `usage`, `sessions` and `doctor` never change anything; with `--json` they print a single JSON object on stdout (with a `"version": 1` field) and keep warnings on stderr. Use `--json` in scripts: the table layout is not guaranteed to stay the same.
+Every write command accepts `--dry-run`. `init`, `add`, `set`, `rename`, `proxy`, `netcheck`, `clash-api`, `remove`, `apply`, `bind`, `unbind` and `env` print only the items they change (or `already up to date`); `-v` / `--verbose` also prints unchanged items. For `list`, `-v` means the full table instead. `list`, `usage`, `sessions` and `doctor` never change anything; with `--json` they print a single JSON object on stdout (with a `"version": 1` field) and keep warnings on stderr. Use `--json` in scripts: the table layout is not guaranteed to stay the same.
 
 ### Login and usage
 
@@ -349,6 +351,46 @@ Proxy URLs must not contain a user name or password: launchers are plain, world-
 > - `HTTPS_PROXY` / `HTTP_PROXY` and a lone `ALL_PROXY` are honoured. Every connection (chatgpt.com, ab.chatgpt.com, oaiusercontent.com) went through the proxy, and none bypassed it.
 > - `off` works: with proxy variables set in the parent shell, Codex connected directly.
 > - With a `socks5h://` URL, most connections were still sent as HTTP `CONNECT` requests to that port. A SOCKS proxy therefore only works when its port also speaks HTTP (for example a "mixed" port); a SOCKS-only port will break most requests. multi-codex prints a warning whenever you set a SOCKS proxy.
+
+### Pre-launch network check
+
+Off by default, set per account. When it is on, `codex-<name>`, `codex-auto`, `run`, `login` and `code` check
+the network first and refuse to start Codex when a check fails (exit code 5). `usage --live` runs the same
+checks, records a failed account as an error without starting Codex for it, and exits 1 like any other error:
+
+| Setting | Checks |
+| ---- | ---- |
+| `multi-codex netcheck NAME basic` | The account's proxy port accepts a TCP connection (3 s timeout). |
+| `multi-codex netcheck NAME strict [--country CC]` | The port, then `https://chatgpt.com/cdn-cgi/trace` fetched directly (no proxy) and through the proxy: both must report `loc` equal to `CC` (default `US`). `https://` proxies are not supported here; use `http://` or `socks5://`. |
+| `multi-codex netcheck NAME --clash on` | Clash / mihomo is in global mode with TUN on, read from `GET /configs` of its external controller. Independent of the level. |
+| `multi-codex netcheck NAME off --clash off` | Turn it off. |
+
+```sh
+multi-codex proxy work 7901
+multi-codex netcheck work strict              # turn it on
+multi-codex netcheck work                     # show the setting and run every check now (exit 0 or 5)
+multi-codex clash-api 127.0.0.1:9097 --secret-stdin < secret.txt   # controller for --clash on
+```
+
+`clash-api` takes `HOST:PORT`, `unix:/PATH` (macOS, Linux) or `\\.\pipe\NAME` (Windows); the secret is read
+from standard input only and is stored in the configuration file. A launch that passes prints one line to
+stderr, `multi-codex: network check passed for account work (strict, US; 812 ms)`; a failed one names the
+check that failed and how to skip it once: `MULTI_CODEX_SKIP_NETCHECK=1 codex-work` (PowerShell:
+`try { $env:MULTI_CODEX_SKIP_NETCHECK=1; codex-work } finally { Remove-Item Env:MULTI_CODEX_SKIP_NETCHECK }`).
+
+Limits:
+
+- **It checks once, at launch.** Codex can fall back to a direct connection when the proxy is not reachable,
+  so if the proxy or Clash goes down while Codex is running, Codex may connect directly. To rule that out,
+  block Codex from the network in a firewall except through the proxy.
+- **The desktop app and the VS Code extension are not covered**, nor is `codex` run without a launcher.
+  `multi-codex code` checks once before opening VS Code.
+- On POSIX the checked launcher runs `multi-codex netgate NAME` first, so `multi-codex` must be on `PATH`
+  (exit 127 otherwise). After upgrading, open a new terminal: an older `multi-codex` still first on `PATH`
+  does not know `netgate`, and a checked launcher then refuses to start with exit code 2.
+- Only the account's proxy setting is checked. A `HTTPS_PROXY` or `ALL_PROXY` set with `multi-codex env`
+  overrides it for Codex, so the checked port is then not the one Codex uses.
+- Exit code 5 can also come from Codex itself; look for `network check failed` on stderr.
 
 ### Declarative setup with `apply`
 
@@ -515,6 +557,7 @@ multi-codex apply      # after upgrading from 0.8 or older: rewrites the launche
 | 2 | Invalid command-line arguments |
 | 3 | Conflict with files multi-codex does not own; `migrate-default` or `restore` refused because credentials are in the system keyring; `use` / `restore` found `~/.codex` in an unexpected state or on another file system. Nothing was changed |
 | 4 | The directory to migrate, switch away from or restore is in use |
+| 5 | The pre-launch network check failed; nothing was started (`codex-<name>`, `codex-auto`, `run`, `login`, `code`, `netcheck NAME`) |
 
 ## More installation options
 

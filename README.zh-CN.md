@@ -188,6 +188,8 @@ multi-codex migrate-default
 | `multi-codex rename 旧名 新名` | 给账号和启动命令改名；目录、登录与链接都不变 |
 | `multi-codex login 名称 [-- 参数]` | 用账号的环境运行 `codex login`，`--` 之后的参数交给 `codex login`；不需要 `~/.local/bin` 在 `PATH` 中 |
 | `multi-codex proxy 名称 端口\|URL\|off\|inherit` | 设置账号的代理 |
+| `multi-codex netcheck 名称 [off\|basic\|strict] [--country CC] [--clash on\|off]` | 设置账号的[启动前网络检查](#启动前网络检查)；只给名称时显示设置并立即检查 |
+| `multi-codex clash-api [地址\|off] [--secret-stdin]` | 显示或设置 `netcheck --clash on` 使用的 Clash / mihomo 控制接口 |
 | `multi-codex remove 名称` | 注销账号，删除它的启动命令。**账号目录会保留** |
 | `multi-codex apply [-f 文件]` | 按配置（或指定文件）收敛全部账号 |
 | `multi-codex list [-v] [--json]` | 列出账号：登录身份、代理、共享、额度、最近使用时间和状态；`-v` 输出完整表格 |
@@ -205,7 +207,7 @@ multi-codex migrate-default
 | `multi-codex restore 名称 [--skip-process-check] [--accept-relogin]` | 撤销 `migrate-default`：把账号移回 `~/.codex` |
 | `multi-codex completion bash\|zsh\|fish\|powershell` | 输出 shell 补全脚本 |
 
-所有写命令都支持 `--dry-run`。`init`、`add`、`set`、`rename`、`proxy`、`remove`、`apply`、`bind`、`unbind`、`env` 只打印有变化的项（没有变化时输出 `already up to date`），加 `-v` / `--verbose` 时连没变的项也打印。`list` 的 `-v` 含义不同，表示输出完整表格。`list`、`usage`、`sessions`、`doctor` 不会修改任何东西；加 `--json` 时，stdout 上只输出一个 JSON 对象（带 `"version": 1` 字段），警告仍写到 stderr。脚本请使用 `--json`：表格格式不保证稳定。
+所有写命令都支持 `--dry-run`。`init`、`add`、`set`、`rename`、`proxy`、`netcheck`、`clash-api`、`remove`、`apply`、`bind`、`unbind`、`env` 只打印有变化的项（没有变化时输出 `already up to date`），加 `-v` / `--verbose` 时连没变的项也打印。`list` 的 `-v` 含义不同，表示输出完整表格。`list`、`usage`、`sessions`、`doctor` 不会修改任何东西；加 `--json` 时，stdout 上只输出一个 JSON 对象（带 `"version": 1` 字段），警告仍写到 stderr。脚本请使用 `--json`：表格格式不保证稳定。
 
 ### 登录身份与额度
 
@@ -399,6 +401,41 @@ multi-codex app work                       # 打开一个独立的 Codex 桌面�
 > - `HTTPS_PROXY`、`HTTP_PROXY`，以及单独设置的 `ALL_PROXY` 都会生效。所有连接（chatgpt.com、ab.chatgpt.com、oaiusercontent.com）都经过了代理，没有绕过代理的连接。
 > - `off` 有效：父 shell 设置了代理变量时，Codex 仍然直连。
 > - 使用 `socks5h://` 地址时，大部分连接仍然按 HTTP `CONNECT` 发往该端口。所以只有同时支持 HTTP 的端口（例如 mixed 端口）才能用 SOCKS 代理；只支持 SOCKS 的端口会导致大部分请求失败。设置 SOCKS 代理时，multi-codex 会给出警告。
+
+### 启动前网络检查
+
+默认关闭，按账号设置。开启后，`codex-<名称>`、`codex-auto`、`run`、`login` 和 `code` 会先检查网络，
+任何一项没通过就不启动 Codex（退出码 5）。`usage --live` 做同样的检查，没通过的账号不启动 Codex、记为出错，
+与其它出错一样整体退出 1：
+
+| 设置 | 检查内容 |
+| ---- | ---- |
+| `multi-codex netcheck 名称 basic` | 账号代理的端口能建立 TCP 连接（超时 3 秒） |
+| `multi-codex netcheck 名称 strict [--country CC]` | 端口；再分别直连（不走代理）和经代理访问 `https://chatgpt.com/cdn-cgi/trace`，两次返回的 `loc` 都要等于 `CC`（默认 `US`）。这一档不支持 `https://` 代理，请用 `http://` 或 `socks5://` |
+| `multi-codex netcheck 名称 --clash on` | Clash / mihomo 处于全局模式并开着 TUN，经它的外部控制接口 `GET /configs` 读取；与档位相互独立 |
+| `multi-codex netcheck 名称 off --clash off` | 关闭 |
+
+```sh
+multi-codex proxy work 7901
+multi-codex netcheck work strict              # 开启
+multi-codex netcheck work                     # 显示设置并立即逐项检查（退出 0 或 5）
+multi-codex clash-api 127.0.0.1:9097 --secret-stdin < secret.txt   # 设置 --clash on 用的控制接口
+```
+
+`clash-api` 接受 `主机:端口`、`unix:/路径`（macOS、Linux）或 `\\.\pipe\名称`（Windows）；secret 只从标准输入读取，
+保存在配置文件里。检查通过时在 stderr 打一行 `multi-codex: network check passed for account work (strict, US; 812 ms)`；
+没通过时说明哪一项失败，并给出本次跳过的写法：`MULTI_CODEX_SKIP_NETCHECK=1 codex-work`（PowerShell：
+`try { $env:MULTI_CODEX_SKIP_NETCHECK=1; codex-work } finally { Remove-Item Env:MULTI_CODEX_SKIP_NETCHECK }`）。
+
+局限：
+
+- **只在启动时检查一次。** 代理连不上时 Codex 可能改为直连，所以 Codex 运行期间代理或 Clash 断开，Codex 可能直连。
+  要杜绝这种情况，请用防火墙禁止 Codex 除经代理之外的联网。
+- **桌面端和 VS Code 插件不受约束**，不经启动命令直接运行的 `codex` 也不受约束。`multi-codex code` 只在打开 VS Code 前检查一次。
+- 在 macOS、Linux 上，开启检查的启动命令会先运行 `multi-codex netgate 名称`，所以 `multi-codex` 必须在 `PATH` 上（否则退出 127）。
+  升级后请重开终端：`PATH` 上排在前面的如果还是旧版 `multi-codex`，它不认识 `netgate`，开启检查的启动命令会以退出码 2 拒绝启动。
+- 只检查账号的代理设置。用 `multi-codex env` 另设的 `HTTPS_PROXY`、`ALL_PROXY` 会覆盖它，这时检查的端口并不是 Codex 实际使用的端口。
+- 退出码 5 也可能来自 Codex 本身，以 stderr 里有没有 `network check failed` 为准。
 
 ### 用 `apply` 声明式部署
 
@@ -617,6 +654,7 @@ multi-codex apply      # 从 0.8 或更早版本升级后执行一次：重写�
 | 2 | 命令行参数不合法 |
 | 3 | 与不归 multi-codex 管理的文件冲突；`migrate-default` 或 `restore` 因凭据存在系统钥匙串而拒绝；`use` / `restore` 发现 `~/.codex` 状态不对或不在同一个文件系统。没有做任何修改 |
 | 4 | 要迁移、要切走或要移回的目录正被占用 |
+| 5 | 启动前网络检查没通过，没有启动任何程序（`codex-<名称>`、`codex-auto`、`run`、`login`、`code`、`netcheck 名称`） |
 
 ## 更多安装方式
 
