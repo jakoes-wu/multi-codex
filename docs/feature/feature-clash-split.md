@@ -1,6 +1,6 @@
 # Clash 检查拆分与接口自动查找
 
-> 2026-11-05 注记：代码已落地（分支 `feature/clash-split`，未提交），第 1 轮代码评审的 2 中 7 低已处理（低 3 记为 §7 第 6 条已知局限）。主要落点：配置 `src/multi_codex/config.py` `NetCheck` / `_parse_net_check`；判定 `src/multi_codex/netcheck.py` `_check_clash` / `read_clash_state`；进程枚举 `src/multi_codex/platform.py` `list_process_argv` / `split_ps_command`；查找 `src/multi_codex/clashfind.py` `find_controller`；命令行 `src/multi_codex/cli.py` `_prepare_clash_find` / `_find_clash` / `_apply_netcheck_changes`。
+> 2026-11-05 注记：代码已落地并合并（PR #41，main `4dbbcda`），随 0.14.0 发布；本机与 Windows 测试机实测通过，第 1 轮代码评审的 2 中 7 低已处理（低 3 记为 §7 第 6 条已知局限）。主要落点：配置 `src/multi_codex/config.py` `NetCheck` / `_parse_net_check`；判定 `src/multi_codex/netcheck.py` `_check_clash` / `read_clash_state`；进程枚举 `src/multi_codex/platform.py` `list_process_argv` / `split_ps_command`；查找 `src/multi_codex/clashfind.py` `find_controller`；命令行 `src/multi_codex/cli.py` `_prepare_clash_find` / `_find_clash` / `_apply_netcheck_changes`。
 >
 > 2026-11-05 注记（原）：方案已定、代码待落地。基线：main `2dece26`（PR #40 合并后），以下 `file:line` 均指该基线。
 
