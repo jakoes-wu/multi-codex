@@ -259,7 +259,7 @@ multi-codex completion fish | source      # in ~/.config/fish/config.fish
 
 In PowerShell (Windows), add it to your profile once: `multi-codex completion powershell | Out-String | Add-Content $PROFILE`.
 
-Subcommands, options and registered account names (including e-mail addresses) are completed.
+Subcommands, options and registered account names (including e-mail addresses) are completed, as are the values of arguments and options: `netcheck` levels, `on` / `off`, `clash-api auto|off`, account names after `--config-from` and shared item names after `--shared-exclude` / `--shared-include`. The PowerShell line above copies the script into your profile, so run it again after upgrading multi-codex (remove the old copy first).
 
 ### Running other commands
 

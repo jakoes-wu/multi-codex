@@ -6,6 +6,14 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- Shell completion (bash, zsh, fish, PowerShell) now completes values: `netcheck` levels
+  (`off`/`basic`/`strict`), `on`/`off` after `--clash`, `--clash-tun` and `--clash-global`, `clash-api auto|off`,
+  account names after `--config-from` and shared item names after `--shared-exclude` / `--shared-include`.
+  Values with argparse `choices` are picked up automatically. PowerShell users who copied the script into
+  `$PROFILE` need to regenerate it.
+
 ## [0.14.0] - 2026-11-05
 
 ### Added

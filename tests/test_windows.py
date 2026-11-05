@@ -632,6 +632,31 @@ class MiscTest(WindowsBase):
         self.assertNotIn("'launch'", text)
         self.assertIn("powershell", completion.SHELLS)
 
+    def test_24b_completion_values(self):
+        # feature-completion-values §8 PowerShell：TabExpansion2 驱动补全器，补全器里调用的 multi-codex 转发到本仓库。
+        self.write(os.path.join(self.fakebin, "multi-codex.cmd"), '@"%FAKE_PYTHON%" -m multi_codex %*\r\n')
+        for name in ("jakoes.wu@icloud.com", "jakoes.wu@gmail.com", "work"):
+            self.ok("add", name)
+        script = self.write(os.path.join(self.tmp, "completion.ps1"), self.ok("completion", "powershell").out)
+        lines = ["multi-codex proxy work ", "multi-codex completion ", "multi-codex netcheck work ",
+                 "multi-codex netcheck work strict --clash ", "multi-codex add new --config-from jak"]
+        command = ("Invoke-Expression ([IO.File]::ReadAllText('{}')); foreach ($line in @({})) {{ "
+                   "$m = (TabExpansion2 -inputScript $line -cursorColumn $line.Length).CompletionMatches; "
+                   "'==' + (($m | ForEach-Object {{ $_.CompletionText }}) -join ' ') }}").format(
+                       script.replace("'", "''"), ", ".join("'{}'".format(line) for line in lines))
+        env = dict(self.env, PATHEXT=os.environ.get("PATHEXT", ".COM;.EXE;.BAT;.CMD"))
+        powershell = platform.system_program("powershell.exe")
+        proc = subprocess.run([powershell, "-NoProfile", "-Command", command], env=env,
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        results = [line[2:].split() for line in proc.stdout.splitlines() if line.startswith("==")]
+        # 第一条先证明补全器确实被调到，后面几条的结果才有意义。
+        self.assertEqual(results[0], ["off", "inherit"], proc.stdout + proc.stderr)
+        self.assertEqual(results[1], list(completion.SHELLS))
+        self.assertEqual(results[2], ["off", "basic", "strict"])
+        self.assertEqual(results[3], ["on", "off"])
+        self.assertEqual(sorted(results[4]), ["jakoes.wu@gmail.com", "jakoes.wu@icloud.com"])
+
     def test_25_doctor_ignores_current_directory(self):
         os.unlink(os.path.join(self.fakebin, "codex.cmd"))
         here = os.path.join(self.tmp, "here")

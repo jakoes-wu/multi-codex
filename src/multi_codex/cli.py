@@ -363,6 +363,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_comp.add_argument("shell", nargs="?", choices=completion.SHELLS)
     # 补全脚本在按 Tab 时调用它读取账号名；不是给人用的，所以不出现在帮助里。
     p_comp.add_argument("--list-accounts", action="store_true", help=argparse.SUPPRESS)
+    # 同上，补 --shared-exclude / --shared-include 的取值时调用，输出配置里的共享项名。
+    p_comp.add_argument("--list-shared-items", action="store_true", help=argparse.SUPPRESS)
 
     # 不依赖 PATH：启动命令目录还没加进 PATH 时，codex-<名> login 找不到，这条照样能用。
     p_login = sub.add_parser("login", description=COMMAND_SUMMARY["login"],
@@ -1499,14 +1501,21 @@ def cmd_doctor(args: argparse.Namespace) -> int:
 
 
 def cmd_completion(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
-    if args.list_accounts:
+    if args.list_accounts or args.list_shared_items:
         # 补全时每按一次 Tab 调用一次：任何问题都静默，不能在用户的命令行上打出警告。
         try:
             config, _ = load_config()
         except (ConfigError, OSError):
             return accounts.EXIT_OK
-        for name in config.accounts:
-            print(name)
+        # 两个都给时都输出，账号在前（补全脚本每次只给其中一个）。
+        if args.list_accounts:
+            for name in config.accounts:
+                print(name)
+        if args.list_shared_items:
+            for item in config.shared_items:
+                # 名字含空白、= 或 : 时，bash 会把它拆成几段或重复已输入的前缀；这类名字不给候选，退回文件名补全。
+                if completion.is_plain_word(item):
+                    print(item)
         return accounts.EXIT_OK
     if args.shell is None:
         raise UsageError("completion needs a shell: bash, zsh, fish or powershell")

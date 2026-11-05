@@ -1,5 +1,6 @@
 """feature-cli-ergonomics §8：shell 补全、run / path、每账号环境变量。"""
 
+import argparse
 import io
 import json
 import os
@@ -88,6 +89,97 @@ class CompletionTest(ErgonomicsBase):
         self.assertIn("work", self.bash_complete("multi-codex migrate-default --source /x "))
         self.assertEqual(self.bash_complete("multi-codex usage --l"), ["--live"])
         self.assertEqual(self.bash_complete("multi-codex run work -- "), [])
+
+    def test_bash_values(self):
+        # feature-completion-values §8 C1–C6：参数与选项的取值。
+        self.assertEqual(self.bash_complete("multi-codex netcheck work "), ["off", "basic", "strict"])
+        for option in ("--clash", "--clash-tun", "--clash-global"):
+            with self.subTest(option=option):
+                self.assertEqual(self.bash_complete("multi-codex netcheck work strict {} ".format(option)), ["on", "off"])
+        self.assertEqual(self.bash_complete("multi-codex clash-api "), ["auto", "off"])
+        self.assertEqual(sorted(self.bash_complete("multi-codex add new --config-from jak")),
+                         ["jakoes.wu@gmail.com", "jakoes.wu@icloud.com"])
+        self.assertEqual(self.bash_complete("multi-codex add new --config-from jakoes.wu@ic"), ["icloud.com"])
+        self.assertEqual(self.bash_complete("multi-codex set work --shared-exclude "),
+                         ["AGENTS.md", "skills", "rules", "agents"])
+        self.assertEqual(self.bash_complete("multi-codex netcheck work --country "), [])
+        # 选项取值之后继续数位置参数：--clash on 之后的 strict 仍是第二个参数。
+        self.assertEqual(self.bash_complete("multi-codex netcheck --clash on work "), ["off", "basic", "strict"])
+
+    def test_list_shared_items(self):
+        # C8：每行一项；配置损坏时静默为空、退出 0；两个选项同时给时账号在前。
+        self.assertEqual(self.ok("completion", "--list-shared-items").out.split(),
+                         ["AGENTS.md", "skills", "rules", "agents"])
+        both = self.ok("completion", "--list-accounts", "--list-shared-items").out.split()
+        self.assertEqual(both[:3], ["jakoes.wu@icloud.com", "jakoes.wu@gmail.com", "work"])
+        self.assertEqual(both[3:], ["AGENTS.md", "skills", "rules", "agents"])
+        self.write(os.path.join(self.state, "config.json"), "{broken")
+        result = self.ok("completion", "--list-shared-items")
+        self.assertEqual((result.out, result.err), ("", ""))
+
+    def test_values_read_from_argparse(self):
+        # C9：取值来自 argparse 的 choices，新加的参数不用改补全代码。
+        from multi_codex import completion
+        parser = argparse.ArgumentParser(prog="multi-codex")
+        sub = parser.add_subparsers(dest="command")
+        demo = sub.add_parser("demo")
+        demo.add_argument("level", choices=["low", "high"])
+        demo.add_argument("--mode", choices=["fast", "slow"])
+        positional, option_values = completion.value_spec(parser)
+        self.assertEqual(positional[("demo", 0)], ["low", "high"])
+        self.assertEqual(option_values[("demo", "--mode")], ["fast", "slow"])
+        script = completion.script("bash", parser)
+        self.assertIn('demo:0) echo "low high" ;;', script)
+        self.assertIn('demo:--mode) echo "fast slow" ;;', script)
+
+    def test_unsafe_values_rejected(self):
+        # 需要转义的词、与账号位置重合的取值表都在生成时报错，不写进脚本。
+        from multi_codex import completion
+        cases = (("demo", ["a b"], None), ("add", ["x", "y"], None), ("demo", ["-x"], None), ("demo", ["x"], "+"))
+        for sub_name, choices, nargs in cases:
+            with self.subTest(sub=sub_name, choices=choices, nargs=nargs):
+                parser = argparse.ArgumentParser(prog="multi-codex")
+                demo = parser.add_subparsers(dest="command").add_parser(sub_name)
+                demo.add_argument("value", choices=choices, nargs=nargs)
+                with self.assertRaises(ValueError):
+                    completion.value_spec(parser)
+        # 现查的共享项名含空白、= 或 : 时不给候选（bash 会拆开或重复前缀）。
+        self.assertEqual([completion.is_plain_word(item) for item in ("AGENTS.md", "a b", "a=b", "a:b")],
+                         [True, False, False, False])
+
+    @unittest.skipUnless(shutil.which("zsh"), "zsh is not installed")
+    def test_zsh_lookup(self):
+        script = os.path.join(self.tmp, "c.zsh")
+        self.write(script, self.ok("completion", "zsh").out)
+        proc = subprocess.run(
+            ["zsh", "-f", "-c", "autoload -U compinit; compinit -u; source {}; _multi_codex_positional netcheck 1; "
+             "_multi_codex_option_value netcheck --clash".format(shlex.quote(script))],
+            env=self.env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(proc.stdout.splitlines(), ["off basic strict", "on off"])
+
+    def fish_complete(self, line):
+        script = os.path.join(self.tmp, "c.fish")
+        self.write(script, self.ok("completion", "fish").out)
+        proc = subprocess.run(["fish", "--no-config", "-c",
+                               "source {}; complete -C {}".format(shlex.quote(script), shlex.quote(line))],
+                              env=self.env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        # complete -C 每行是“候选<Tab>说明”，只取候选。
+        return [item.split("\t")[0] for item in proc.stdout.splitlines() if item]
+
+    @unittest.skipUnless(shutil.which("fish"), "fish is not installed")
+    def test_fish_values(self):
+        # fish 会按自己的规则（不分大小写）排序候选，这里只比集合。
+        self.assertCountEqual(self.fish_complete("multi-codex netcheck work "), ["basic", "off", "strict"])
+        self.assertCountEqual(self.fish_complete("multi-codex netcheck work strict --clash "), ["off", "on"])
+        self.assertCountEqual(self.fish_complete("multi-codex add new --config-from jak"),
+                         ["jakoes.wu@gmail.com", "jakoes.wu@icloud.com"])
+        self.assertCountEqual(self.fish_complete("multi-codex set work --shared-exclude "),
+                         ["AGENTS.md", "agents", "rules", "skills"])
+        self.assertCountEqual(self.fish_complete("multi-codex proxy work "), ["inherit", "off"])
+        self.assertCountEqual(self.fish_complete("multi-codex completion "), ["bash", "fish", "powershell", "zsh"])
+        self.assertCountEqual(self.fish_complete("multi-codex run jak"), ["jakoes.wu@gmail.com", "jakoes.wu@icloud.com"])
 
     @unittest.skipUnless(shutil.which("zsh"), "zsh is not installed")
     def test_zsh_syntax(self):
