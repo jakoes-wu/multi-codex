@@ -25,6 +25,8 @@ EXIT_ERROR = 1
 EXIT_USAGE = 2
 EXIT_CONFLICT = 3
 EXIT_BUSY = 4
+# 启动前网络检查未通过，未启动任何程序（docs/feature/feature-network-check.md）。
+EXIT_NETCHECK = 5
 
 # orphan_scope 取这个值时，清理启动命令目录里所有不在配置中的受管启动命令。
 ALL_ORPHANS = "all"
@@ -95,7 +97,8 @@ def plan(old: Config, new: Config, *, config_exists: bool = True,
             continue
         directory = os.path.join(new_root, account.dir_name)
         actions.extend(_plan_account_dir(directory, assumed))
-        actions.extend(_plan_launcher(new_bin, account.name, directory, account.proxy, account.env))
+        actions.extend(_plan_launcher(new_bin, account.name, directory, account.proxy, account.env,
+                                      account.net_check.active))
         if old_account is not None and old_bin != new_bin:
             actions.extend(_plan_launcher_delete(old_bin, old_account.name, planned_deletes,
                                                  "bin_dir changed"))
@@ -176,7 +179,8 @@ def _make_private_dir(directory: str) -> None:
 
 
 def _plan_launcher(bin_dir: str, name: str, directory: str, proxy: str,
-                   env: Optional[Dict[str, str]] = None) -> List[Action]:
+                   env: Optional[Dict[str, str]] = None, checked: bool = False) -> List[Action]:
+    """checked：账号开启了启动前网络检查，POSIX 启动命令要带检查段；Windows .cmd 不变（检查在 launch 里做）。"""
     path = launcher.launcher_path(bin_dir, name)
     if platform.IS_WINDOWS:
         # python 或入口路径没法安全写进 .cmd 时按冲突处理（退出 3），不生成一个运行不了的启动命令
@@ -186,7 +190,7 @@ def _plan_launcher(bin_dir: str, name: str, directory: str, proxy: str,
         python, entry = launcher.windows_command_paths()
         content = launcher.render_windows(name, python, entry)
     else:
-        content = launcher.render(name, directory, proxy, env)
+        content = launcher.render(name, directory, proxy, env, net_check=checked)
     mode = launcher.launcher_mode(env)
     kind = entry_kind(path)
     if kind == KIND_MISSING:
@@ -334,5 +338,6 @@ def launcher_status(config: Config, name: str) -> str:
             return "conflict"
         expected = launcher.render_windows(name, *launcher.windows_command_paths())
         return "ok" if launcher.launcher_file_ok(path, expected, env) else "stale"
-    expected = launcher.render(name, account_dir(config, name), account.proxy if account else "inherit", env)
+    expected = launcher.render(name, account_dir(config, name), account.proxy if account else "inherit", env,
+                               net_check=account.net_check.active if account else False)
     return "ok" if launcher.launcher_file_ok(path, expected, env) else "stale"

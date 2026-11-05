@@ -14,6 +14,7 @@ from typing import Dict, List, Optional, Sequence, Tuple
 
 from . import platform
 
+from .config import NETCHECK_SKIP_ENV as SKIP_NETCHECK_ENV
 from .config import PROXY_ENV_VARS, PROXY_INHERIT, PROXY_OFF, is_socks
 from .fsutil import KIND_FILE, entry_kind, read_text
 from .platform import ISOLATION_BREAKING_ENV
@@ -64,7 +65,7 @@ def launcher_file_ok(path: str, content: str, env: Optional[Dict[str, str]]) -> 
 
 
 def render(name: str, account_dir: str, proxy: str, env: Optional[Dict[str, str]] = None,
-           command_mode: bool = False) -> str:
+           command_mode: bool = False, *, net_check: bool = False) -> str:
     """生成 POSIX sh 启动命令的完整内容。所有值都经 shlex.quote 转义。
 
     0.9 起在设好 CODEX_HOME 之后清除 ISOLATION_BREAKING_ENV（feature-isolation-sharing-rename §5.1.1），
@@ -72,6 +73,9 @@ def render(name: str, account_dir: str, proxy: str, env: Optional[Dict[str, str]
     除此之外，内容只由参数决定；再改动模板同样会让所有启动命令变成 stale，必须在 CHANGELOG 写明。
     command_mode 供 `multi-codex run` 使用：环境设置与启动命令完全相同，只是最后执行 "$@" 而不是 codex，
     这样两者不会各算一套环境变量。
+    net_check 为真时（账号开启了启动前网络检查，feature-network-check §5.1.3）在账号目录检查之后插入检查段；
+    为假时输出与不带该参数时逐字相同（tests/data/posix-launchers-44cb4c1.json 快照）。必须按关键字传：
+    快照测试按位置传 command_mode。command_mode 时不插入，`run` / `code` 在 Python 里检查。
     """
     q_dir = shlex.quote(account_dir)
     lines = [
@@ -85,6 +89,10 @@ def render(name: str, account_dir: str, proxy: str, env: Optional[Dict[str, str]
         '  printf \'multi-codex: account directory does not exist: %s\\n\' "$account_dir" >&2',
         "  exit 1",
         "fi",
+    ]
+    if net_check and not command_mode:
+        lines.extend(_net_check_lines(name))
+    lines += [
         'CODEX_HOME="$account_dir"',
         "export CODEX_HOME",
         # shell 里的 CODEX_API_KEY 等变量会让每个账号都用同一个 API key 或同一份数据库，破坏按账号隔离。
@@ -109,6 +117,25 @@ def render(name: str, account_dir: str, proxy: str, env: Optional[Dict[str, str]
         "",
     ])
     return "\n".join(lines)
+
+
+def _net_check_lines(name: str) -> List[str]:
+    """检查版启动命令的检查段：在 / 下运行 `multi-codex netgate NAME`，未通过就以它的退出码结束。
+
+    - 必须先 cd /：install.sh 与 Homebrew 的包装用 `python -m multi_codex` 运行，-m 会把当前目录放进
+      模块搜索路径最前面，在用户项目目录里运行时，项目里的 json.py、ssl.py 会顶替标准库被执行。
+      子 shell 里切目录，codex 本身仍在用户目录启动。
+    - 按 PATH 找 multi-codex 而不写死路径：Homebrew 的路径带版本号，升级后旧路径会消失。
+    - 检查在子进程里，删不掉本 shell 的跳过变量，所以通过后由 sh 删掉，codex 及其子进程不会继承“跳过”。
+    """
+    return [
+        "if ! command -v multi-codex >/dev/null 2>&1; then",
+        "  echo 'multi-codex: multi-codex not found in PATH; it runs the network check of this account' >&2",
+        "  exit 127",
+        "fi",
+        "(cd / && exec multi-codex netgate {}) || exit $?".format(shlex.quote(name)),
+        "unset " + SKIP_NETCHECK_ENV,
+    ]
 
 
 def _proxy_lines(proxy: str) -> list:

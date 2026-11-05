@@ -244,7 +244,9 @@ class _AppServer(object):
     只对包装器发 SIGKILL，真正的 app-server 会变成孤儿，只能等它自己 45 秒的看门狗退出。
     """
 
-    def __init__(self, launcher: str, timeout_sec: float) -> None:
+    def __init__(self, launcher: str, timeout_sec: float, env: Optional[dict] = None) -> None:
+        # env 为 None 时继承本进程环境；cmd_usage 只给开启网络检查的账号传入带“静默跳过”变量的环境，
+        # 让启动命令里的检查不重复做（检查已在 cmd_usage 里做过），也不把提示写进 stderr 临时文件。
         self.deadline = time.monotonic() + timeout_sec
         self.timeout_sec = timeout_sec
         self.stderr_file = tempfile.TemporaryFile()
@@ -254,11 +256,11 @@ class _AppServer(object):
             if platform.IS_WINDOWS:
                 # Windows 没有进程组信号：新进程组只为让 taskkill /T 有明确的树根，CREATE_NO_WINDOW 防止弹窗。
                 self.proc = subprocess.Popen([launcher, "app-server"], stdin=subprocess.PIPE,
-                                             stdout=subprocess.PIPE, stderr=self.stderr_file,
+                                             stdout=subprocess.PIPE, stderr=self.stderr_file, env=env,
                                              creationflags=_CREATE_NEW_PROCESS_GROUP | _CREATE_NO_WINDOW)
             else:
                 self.proc = subprocess.Popen([launcher, "app-server"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                             stderr=self.stderr_file, start_new_session=True)
+                                             stderr=self.stderr_file, start_new_session=True, env=env)
         except OSError:
             # 构造失败时调用方拿不到对象、不会调用 close()，临时文件在这里关掉。
             self.stderr_file.close()
@@ -440,7 +442,7 @@ def _rpc_error(message: dict, what: str) -> Optional[LiveError]:
     return LiveError("app-server error {}: {}".format(code, text[:_MESSAGE_LIMIT]))
 
 
-def live_snapshot(name: str, launcher: str, timeout_sec: float) -> UsageResult:
+def live_snapshot(name: str, launcher: str, timeout_sec: float, env: Optional[dict] = None) -> UsageResult:
     """通过该账号的启动命令运行 `codex app-server`，调用 account/rateLimits/read。
 
     走启动命令是为了沿用该账号的 CODEX_HOME 和代理设置。查询会联网；Codex 可能顺带刷新令牌并写回
@@ -450,7 +452,7 @@ def live_snapshot(name: str, launcher: str, timeout_sec: float) -> UsageResult:
     graceful = False
     try:
         try:
-            server = _AppServer(launcher, timeout_sec)
+            server = _AppServer(launcher, timeout_sec, env)
         except OSError as exc:
             raise LiveError("cannot start {} app-server: {}".format(launcher, exc))
         server.send({"id": 1, "method": "initialize",

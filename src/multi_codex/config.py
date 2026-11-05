@@ -71,7 +71,8 @@ class Account(object):
 
     def __init__(self, name: str, proxy: str = PROXY_INHERIT, shared: bool = False,
                  managed_links: Optional[List[str]] = None, env: Optional[Dict[str, str]] = None,
-                 shared_exclude: Optional[List[str]] = None, dir_name: Optional[str] = None) -> None:
+                 shared_exclude: Optional[List[str]] = None, dir_name: Optional[str] = None,
+                 net_check: Optional["NetCheck"] = None) -> None:
         self.name = name
         self.proxy = proxy
         self.shared = shared
@@ -79,10 +80,12 @@ class Account(object):
         self.env = dict(env or {})
         self.shared_exclude = list(shared_exclude or [])
         self.dir_name = dir_name or name
+        # 启动前网络检查设置（feature-network-check §5.1.1）；缺省为关闭。
+        self.net_check = net_check.copy() if net_check else NetCheck()
 
     def copy(self) -> "Account":
         return Account(self.name, self.proxy, self.shared, list(self.managed_links), dict(self.env),
-                       list(self.shared_exclude), self.dir_name)
+                       list(self.shared_exclude), self.dir_name, self.net_check)
 
     def to_dict(self) -> dict:
         data = {"proxy": self.proxy, "shared": self.shared, "managed_links": list(self.managed_links)}
@@ -96,13 +99,16 @@ class Account(object):
             data["shared_exclude"] = list(self.shared_exclude)
         if self.dir_name != self.name:
             data["dir"] = self.dir_name
+        # 未开启检查时不写：未开启账号的序列化结果与旧版逐字相同（原因同上面 env 的注释）。
+        if self.net_check.active:
+            data["net_check"] = self.net_check.to_dict()
         return data
 
 
 class Config(object):
     def __init__(self, root: str, bin_dir: str, shared_dir: Optional[str],
                  shared_items: List[str], accounts: Dict[str, Account],
-                 bindings: Optional[Dict[str, str]] = None) -> None:
+                 bindings: Optional[Dict[str, str]] = None, clash_api: Optional["ClashApi"] = None) -> None:
         self.root = root
         self.bin_dir = bin_dir
         self.shared_dir = shared_dir
@@ -111,6 +117,9 @@ class Config(object):
         self.accounts = accounts
         # 目录绑定：规范路径（binding.normalize_dir）-> 账号名。属于本机状态，apply -f 时沿用当前值。
         self.bindings = dict(bindings or {})
+        # Clash / mihomo 外部控制接口，整台机器一个（feature-network-check §5.1.1）。属于本机状态，
+        # apply -f 时沿用当前值；None 表示未设置。
+        self.clash_api = clash_api
 
     def find(self, name: str) -> Optional[Account]:
         """按大小写不敏感匹配查找账号。
@@ -145,7 +154,8 @@ class Config(object):
 
     def copy(self) -> "Config":
         return Config(self.root, self.bin_dir, self.shared_dir, self.shared_items,
-                      {key: value.copy() for key, value in self.accounts.items()}, dict(self.bindings))
+                      {key: value.copy() for key, value in self.accounts.items()}, dict(self.bindings),
+                      self.clash_api)
 
     def to_dict(self) -> dict:
         data = {
@@ -158,6 +168,9 @@ class Config(object):
         # 没有绑定时不写这个字段，0.4.0 的配置序列化结果保持不变（原因同 Account.to_dict 的 env）。
         if self.bindings:
             data["bindings"] = {path: self.bindings[path] for path in sorted(self.bindings)}
+        # 同理：未设置时不写，旧配置读入再写回逐字不变。
+        if self.clash_api is not None:
+            data["clash_api"] = self.clash_api.to_dict()
         return data
 
 
@@ -248,7 +261,8 @@ def parse_config(raw: str, source: str) -> Config:
         if not isinstance(path, str) or not os.path.isabs(path) or not isinstance(name, str) \
                 or not NAME_PATTERN.match(name):
             raise ConfigError("{}: invalid binding {!r} -> {!r}".format(source, path, name))
-    return Config(root, bin_dir, shared_dir, shared_items, accounts, bindings)
+    clash_api = _parse_clash_api(data.get("clash_api"), source)
+    return Config(root, bin_dir, shared_dir, shared_items, accounts, bindings, clash_api)
 
 
 def _check_dir_names(accounts: Dict[str, Account], source: str) -> None:
@@ -311,7 +325,8 @@ def _parse_account(name: str, value: object, source: str) -> Account:
     dir_name = value.get("dir", name)
     if not isinstance(dir_name, str) or not NAME_PATTERN.match(dir_name):
         raise ConfigError("{}: account {!r}: 'dir' must be a valid account directory name".format(source, name))
-    return Account(name, proxy, shared, links, env, unique_items(exclude), dir_name)
+    net_check = _parse_net_check(value.get("net_check"), "{}: account {!r}".format(source, name))
+    return Account(name, proxy, shared, links, env, unique_items(exclude), dir_name, net_check)
 
 
 def unique_items(items: List[str]) -> List[str]:
@@ -399,3 +414,146 @@ def _check_port(port: int) -> None:
 
 def is_socks(proxy: str) -> bool:
     return proxy.startswith("socks5://") or proxy.startswith("socks5h://")
+
+
+NET_CHECK_LEVELS = ("off", "basic", "strict")
+# 本次跳过网络检查的环境变量。放在 config 而不是 netcheck，是为了让生成启动命令的 launcher
+# 不必导入联网模块（http.client、ssl），未开启检查的账号启动时不多付导入开销。
+NETCHECK_SKIP_ENV = "MULTI_CODEX_SKIP_NETCHECK"
+DEFAULT_COUNTRY = "US"
+COUNTRY_PATTERN = re.compile(r"^[A-Za-z]{2}$")
+
+
+class NetCheck(object):
+    """账号的启动前网络检查设置（feature-network-check §5.1.1）。
+
+    level：off 不检查代理；basic 只要求账号代理端口能连通；strict 另要求直连与经代理访问
+    chatgpt.com/cdn-cgi/trace 得到的 loc 都等于 country。
+    clash：另要求 Clash / mihomo 为全局模式且 TUN 已开启，与 level 相互独立。
+    country 在非 strict 档位也保存，切到 strict 时生效。
+    """
+
+    def __init__(self, level: str = "off", country: str = DEFAULT_COUNTRY, clash: bool = False) -> None:
+        self.level = level
+        self.country = country
+        self.clash = clash
+
+    @property
+    def active(self) -> bool:
+        """是否需要在启动前检查；为假时启动命令与旧版逐字相同。"""
+        return self.level != "off" or self.clash
+
+    def copy(self) -> "NetCheck":
+        return NetCheck(self.level, self.country, self.clash)
+
+    def to_dict(self) -> dict:
+        return {"level": self.level, "country": self.country, "clash": self.clash}
+
+
+class ClashApi(object):
+    r"""Clash / mihomo 外部控制接口。
+
+    address 已规范化为三种形态之一：`http://HOST:PORT`、`unix:/绝对路径`（仅 POSIX）、
+    `\\.\pipe\名称`（仅 Windows）。secret 只用于 TCP 形态（mihomo 的 unix 套接字与命名管道不鉴权），
+    空字符串表示不带。它和账号 env 一样存在 0600 的 config.json 里。
+    """
+
+    def __init__(self, address: str, secret: str = "") -> None:
+        self.address = address
+        self.secret = secret
+
+    def to_dict(self) -> dict:
+        data = {"address": self.address}
+        if self.secret:
+            data["secret"] = self.secret
+        return data
+
+
+def normalize_country(value: object) -> str:
+    """两位字母国家代码，存大写。"""
+    if not isinstance(value, str) or not COUNTRY_PATTERN.match(value):
+        raise ValueError("invalid country {!r}: use a two-letter code such as US".format(value))
+    return value.upper()
+
+
+PIPE_PREFIX = "\\\\.\\pipe\\"
+
+
+def normalize_clash_address(value: object) -> str:
+    r"""把 Clash 接口地址规范化为 `http://HOST:PORT`、`unix:/路径` 或 `\\.\pipe\名称`。
+
+    mihomo 的命名管道名必须以 `\\.\pipe\` 开头（hub/route/server.go 的 startPipe），这里同样要求。
+    """
+    if not isinstance(value, str) or not value:
+        raise ValueError("Clash controller address must be a non-empty string")
+    if value.startswith("pipe:"):
+        value = value[len("pipe:"):]
+    if value.lower().startswith(PIPE_PREFIX):
+        if not platform.IS_WINDOWS:
+            raise ValueError("named pipe addresses are only supported on Windows")
+        if len(value) == len(PIPE_PREFIX):
+            raise ValueError("named pipe address must include a pipe name")
+        return value
+    if value.startswith("unix:"):
+        path = value[len("unix:"):]
+        if platform.IS_WINDOWS:
+            raise ValueError("unix socket addresses are not supported on Windows; use a TCP address "
+                             "or \\\\.\\pipe\\NAME")
+        if not os.path.isabs(path):
+            raise ValueError("unix socket address must be an absolute path, e.g. unix:/tmp/mihomo.sock")
+        return "unix:" + path
+    if "://" not in value:
+        value = "http://" + value
+    parts = urllib.parse.urlsplit(value)
+    if parts.scheme != "http":
+        raise ValueError("unsupported Clash controller scheme {!r}; use HOST:PORT, http://HOST:PORT, "
+                         "unix:/PATH or \\\\.\\pipe\\NAME".format(parts.scheme))
+    if parts.username is not None or parts.password is not None or parts.path not in ("", "/") \
+            or parts.query or parts.fragment:
+        raise ValueError("Clash controller address must be HOST:PORT without a path; "
+                         "pass the secret with --secret-stdin")
+    host = parts.hostname
+    try:
+        port = parts.port
+    except ValueError:
+        raise ValueError("Clash controller address has an invalid port")
+    if not host or port is None:
+        raise ValueError("Clash controller address must contain a host and a port")
+    if not 1 <= port <= 65535:
+        raise ValueError("Clash controller port must be between 1 and 65535, got {}".format(port))
+    if ":" in host:
+        host = "[{}]".format(host)
+    return "http://{}:{}".format(host, port)
+
+
+def _parse_net_check(value: object, where: str) -> NetCheck:
+    if value is None:
+        return NetCheck()
+    if not isinstance(value, dict):
+        raise ConfigError("{}: 'net_check' must be an object".format(where))
+    level = value.get("level", "off")
+    if level not in NET_CHECK_LEVELS:
+        raise ConfigError("{}: 'net_check.level' must be one of {}".format(where, ", ".join(NET_CHECK_LEVELS)))
+    try:
+        country = normalize_country(value.get("country", DEFAULT_COUNTRY))
+    except ValueError as exc:
+        raise ConfigError("{}: 'net_check.country': {}".format(where, exc))
+    clash = value.get("clash", False)
+    if not isinstance(clash, bool):
+        raise ConfigError("{}: 'net_check.clash' must be true or false".format(where))
+    return NetCheck(level, country, clash)
+
+
+def _parse_clash_api(value: object, source: str) -> Optional[ClashApi]:
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise ConfigError("{}: 'clash_api' must be an object".format(source))
+    try:
+        address = normalize_clash_address(value.get("address"))
+    except ValueError as exc:
+        raise ConfigError("{}: 'clash_api.address': {}".format(source, exc))
+    secret = value.get("secret", "")
+    if not isinstance(secret, str) or "\n" in secret or "\r" in secret:
+        raise ConfigError("{}: 'clash_api.secret' must be a single-line string".format(source))
+    return ClashApi(address, secret)

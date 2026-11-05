@@ -12,6 +12,15 @@ All notable changes to this project are documented here. The format follows
   links as junctions, a Codex process check for `use` / `restore` / `migrate-default`, retries when Windows
   reports a file in use, `usage --live` ending the whole process tree, PowerShell resume commands and
   `multi-codex completion powershell`; the platform badge now lists Windows. See the Windows section of the README for the limits.
+- Pre-launch network check, per account and off by default: `multi-codex netcheck NAME basic|strict`
+  refuses to start Codex (exit code 5) unless the account's proxy port is open (`basic`), and also the
+  exit country seen at `chatgpt.com/cdn-cgi/trace` directly and through the proxy equals the configured
+  one (`strict`, `--country`, default US). `--clash on` also requires Clash / mihomo in global mode with
+  TUN on, read from its external controller (`multi-codex clash-api`). Applies to `codex-<name>`,
+  `codex-auto`, `run`, `login` and `code`; `usage --live` records an account that fails as an error (exit
+  code 1). Skip it once with `MULTI_CODEX_SKIP_NETCHECK=1`.
+  It checks only at launch: it does not stop Codex from connecting directly if the proxy goes down later,
+  and the desktop app and the VS Code extension are not covered.
 
 ### Changed
 
