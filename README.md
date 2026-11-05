@@ -95,6 +95,7 @@ Launchers are `codex-<name>.cmd` in `~/.local/bin` (`%USERPROFILE%\.local\bin`);
 - **Special characters in arguments.** When you call `codex-<name>` from cmd, cmd interprets `& | > < ^ %` in the arguments first; quote them, or call the launcher from PowerShell. When the npm package's `codex.js` cannot be found next to `codex.cmd`, multi-codex runs `codex.cmd` itself, and the same characters may be changed by cmd. This also applies to other `.cmd` / `.bat` targets, such as `run NAME -- some.cmd` and `code.cmd` used by `multi-codex code`.
 - **Paths with `"`, `%` or `!`.** If the account name or the path of Python or multi-codex contains one of these, the `.cmd` launcher cannot be written safely; `add` and `apply` report a conflict (exit 3) and change nothing.
 - **Switching needs Codex closed.** `use`, `restore` and `migrate-default` refuse (exit 4) while any Codex process is running (`codex.exe`, or `node.exe` running the npm package), whichever account it belongs to.
+- **Keyring logins over SSH.** When Codex keeps the login in Windows Credential Manager (`cli_auth_credentials_store = "keyring"`), a launcher run from an SSH session with key authentication cannot read it and reports `ERROR_NO_SUCH_LOGON_SESSION`; this is a Windows restriction. Run it from the desktop, or store the login in a file (`cli_auth_credentials_store = "file"`) and log in again.
 - **Resume commands are for PowerShell.** The commands printed by `multi-codex sessions` must be pasted into PowerShell.
 - `multi-codex app` is macOS only.
 

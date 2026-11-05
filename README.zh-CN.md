@@ -95,6 +95,7 @@ multi-codex --version
 - **参数里的特殊字符。** 在 cmd 里调用 `codex-<名称>` 时，cmd 会先解释参数里的 `& | > < ^ %`；请加引号，或在 PowerShell 里调用。`codex.cmd` 旁边找不到 npm 包的 `codex.js` 时，multi-codex 只能直接运行 `codex.cmd`，这些字符同样可能被 cmd 改写。其它 `.cmd` / `.bat` 目标也一样，例如 `run NAME -- some.cmd`，以及 `multi-codex code` 用到的 `code.cmd`。
 - **路径里有 `"`、`%` 或 `!`。** 账号名、Python 或 multi-codex 的路径含这些字符时，无法安全写出 `.cmd` 启动命令；`add`、`apply` 报冲突（退出码 3），不做任何改动。
 - **切换前要关掉 Codex。** 只要有 Codex 进程在运行（`codex.exe`，或运行 npm 包的 `node.exe`），不论属于哪个账号，`use`、`restore`、`migrate-default` 都会拒绝（退出码 4）。
+- **经 SSH 使用凭据管理器里的登录。** Codex 把登录存在 Windows 凭据管理器（`cli_auth_credentials_store = "keyring"`）时，用密钥方式 SSH 登录后运行启动命令读不到这份登录，报 `ERROR_NO_SUCH_LOGON_SESSION`；这是 Windows 的限制。请在桌面上运行，或改为文件存储（`cli_auth_credentials_store = "file"`）后重新登录。
 - **续聊命令要在 PowerShell 里运行。** `multi-codex sessions` 给出的命令需粘贴到 PowerShell。
 - `multi-codex app` 只支持 macOS。
 
