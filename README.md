@@ -188,8 +188,8 @@ More questions are answered in the [FAQ](#faq).
 | `multi-codex rename OLD NEW` | Rename an account and its launcher; the directory, login and links stay. |
 | `multi-codex login NAME [-- ARGS]` | Run `codex login` with an account's environment; arguments after `--` go to `codex login`. Does not need `~/.local/bin` on `PATH`. |
 | `multi-codex proxy NAME PORT\|URL\|off\|inherit` | Set an account's proxy. |
-| `multi-codex netcheck NAME [off\|basic\|strict] [--country CC] [--clash on\|off]` | Set the [pre-launch network check](#pre-launch-network-check) of an account; with only NAME, show it and run the checks now. |
-| `multi-codex clash-api [ADDRESS\|off] [--secret-stdin]` | Show or set the Clash / mihomo controller used by `netcheck --clash on`. |
+| `multi-codex netcheck NAME [off\|basic\|strict] [--country CC] [--clash on\|off] [--clash-tun on\|off] [--clash-global on\|off]` | Set the [pre-launch network check](#pre-launch-network-check) of an account; with only NAME, show it and run the checks now. |
+| `multi-codex clash-api [ADDRESS\|auto\|off] [--secret-stdin]` | Show or set the Clash / mihomo controller used by the Clash checks of `netcheck`; `auto` finds the running one. |
 | `multi-codex remove NAME` | Unregister an account and delete its launcher. **The account directory is kept.** |
 | `multi-codex apply [-f FILE]` | Converge everything to the configuration (or to `FILE`). |
 | `multi-codex list [-v] [--json]` | Show accounts: who is logged in, proxy, sharing, usage, when last used and status. `-v` shows the full table. |
@@ -362,18 +362,24 @@ checks, records a failed account as an error without starting Codex for it, and 
 | ---- | ---- |
 | `multi-codex netcheck NAME basic` | The account's proxy port accepts a TCP connection (3 s timeout). |
 | `multi-codex netcheck NAME strict [--country CC]` | The port, then `https://chatgpt.com/cdn-cgi/trace` fetched directly (no proxy) and through the proxy: both must report `loc` equal to `CC` (default `US`). `https://` proxies are not supported here; use `http://` or `socks5://`. |
-| `multi-codex netcheck NAME --clash on` | Clash / mihomo is in global mode with TUN on, read from `GET /configs` of its external controller. Independent of the level. |
+| `multi-codex netcheck NAME --clash-tun on` | Clash / mihomo has TUN on and is not in `direct` mode, read from `GET /configs` of its external controller. Independent of the level. |
+| `multi-codex netcheck NAME --clash-global on` | Clash / mihomo is in global mode. Without `--clash-tun on` it only covers traffic sent to the proxy port, so a warning is printed. |
+| `multi-codex netcheck NAME --clash on` | Both Clash checks (shorthand for the two above; `--clash off` turns both off). An older `"clash": true` in the configuration means both. |
 | `multi-codex netcheck NAME off --clash off` | Turn it off. |
 
 ```sh
 multi-codex proxy work 7901
 multi-codex netcheck work strict              # turn it on
 multi-codex netcheck work                     # show the setting and run every check now (exit 0 or 5)
-multi-codex clash-api 127.0.0.1:9097 --secret-stdin < secret.txt   # controller for --clash on
+multi-codex clash-api auto                    # find the running Clash / mihomo controller
+multi-codex clash-api 127.0.0.1:9097 --secret-stdin < secret.txt   # or set it by hand
 ```
 
 `clash-api` takes `HOST:PORT`, `unix:/PATH` (macOS, Linux) or `\\.\pipe\NAME` (Windows); the secret is read
-from standard input only and is stored in the configuration file. A launch that passes prints one line to
+from standard input only and is stored in the configuration file. `clash-api auto` reads the controller from
+the arguments of running Clash / mihomo processes and their configuration files (and Clash Verge's
+`config.yaml` on macOS and Windows), tries each one with `GET /configs`, and saves the first that answers;
+it only uses addresses on this machine. Turning a Clash check on while no controller is set runs the same search. A launch that passes prints one line to
 stderr, `multi-codex: network check passed for account work (strict, US; 812 ms)`; a failed one names the
 check that failed and how to skip it once: `MULTI_CODEX_SKIP_NETCHECK=1 codex-work` (PowerShell:
 `try { $env:MULTI_CODEX_SKIP_NETCHECK=1; codex-work } finally { Remove-Item Env:MULTI_CODEX_SKIP_NETCHECK }`).

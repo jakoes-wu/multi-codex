@@ -252,9 +252,17 @@ class ChecksTest(unittest.TestCase):
             else:
                 os.environ[key] = value
 
-    def config(self, proxy="inherit", level="off", country="US", clash=False, clash_api=None):
-        data = {"accounts": {"work": {"proxy": proxy,
-                                      "net_check": {"level": level, "country": country, "clash": clash}}}}
+    def config(self, proxy="inherit", level="off", country="US", clash=None, clash_api=None, clash_tun=None,
+               clash_global=None):
+        """clash 写旧字段（两项一起），clash_tun / clash_global 写新字段；都不给时不写 Clash 设置。"""
+        net_check = {"level": level, "country": country}
+        if clash is not None:
+            net_check["clash"] = clash
+        if clash_tun is not None:
+            net_check["clash_tun"] = clash_tun
+        if clash_global is not None:
+            net_check["clash_global"] = clash_global
+        data = {"accounts": {"work": {"proxy": proxy, "net_check": net_check}}}
         if clash_api is not None:
             data["clash_api"] = clash_api
         config = parse_config(json.dumps(data), "test")
@@ -392,6 +400,7 @@ class ChecksTest(unittest.TestCase):
     def test_clash_not_set_or_down(self):
         (result,) = self.results(clash=True)
         self.assertIn("multi-codex clash-api ADDRESS", result.detail)
+        self.assertIn("multi-codex clash-api auto", result.detail)
         result = self.clash_result(type("Down", (), {"address": "127.0.0.1:{}".format(closed_port())})())
         self.assertIn("refused", result.detail)
 
@@ -417,11 +426,46 @@ class ChecksTest(unittest.TestCase):
         self.assertEqual([result.item for result in stopped], ["clash"])
 
     def test_scope_text(self):
-        cases = [(("basic", False), "basic"), (("strict", False), "strict, US"),
-                 (("strict", True), "strict, US, clash"), (("off", True), "clash")]
-        for (level, clash), expected in cases:
-            _, account = self.config("http://127.0.0.1:1", level, clash=clash)
+        cases = [(("basic", False, False), "basic"), (("strict", False, False), "strict, US"),
+                 (("strict", True, True), "strict, US, clash"), (("off", True, True), "clash"),
+                 (("off", True, False), "clash tun"), (("off", False, True), "clash global"),
+                 (("strict", True, False), "strict, US, clash tun"),
+                 (("basic", False, True), "basic, clash global")]
+        for (level, tun, global_), expected in cases:
+            _, account = self.config("http://127.0.0.1:1", level, clash_tun=tun, clash_global=global_)
             self.assertEqual(netcheck.scope_text(account), expected)
+
+    # feature-clash-split §8-2：两项分别判定
+
+    def split_result(self, mihomo, mode, tun, need_tun, need_global):
+        mihomo.server.payload = {"mode": mode, "tun": {"enable": tun}}
+        (result,) = self.results(clash_tun=need_tun, clash_global=need_global,
+                                 clash_api={"address": mihomo.address})
+        return result
+
+    def test_clash_split_states(self):
+        mihomo = MihomoServer()
+        self.addCleanup(mihomo.stop)
+        cases = [  # (mode, tun 开, 要 TUN, 要全局) → 是否通过
+            ("rule", True, True, False, True), ("global", True, True, False, True),
+            ("direct", True, True, False, False), ("rule", False, True, False, False),
+            ("global", False, False, True, True), ("rule", False, False, True, False),
+            ("global", True, True, True, True), ("rule", True, True, True, False),
+            ("global", False, True, True, False)]
+        for mode, tun, need_tun, need_global, ok in cases:
+            with self.subTest(mode=mode, tun=tun, need_tun=need_tun, need_global=need_global):
+                result = self.split_result(mihomo, mode, tun, need_tun, need_global)
+                self.assertEqual(result.ok, ok, result.detail)
+        self.assertEqual(self.split_result(mihomo, "rule", True, True, False).detail, "mode=rule, tun on")
+        self.assertEqual(self.split_result(mihomo, "global", False, False, True).detail, "mode=global, tun off")
+        self.assertIn("direct", self.split_result(mihomo, "direct", True, True, False).detail)
+
+    def test_failure_text_single_item(self):
+        for tun, global_ in ((True, False), (False, True)):
+            _, account = self.config("http://127.0.0.1:1", "off", clash_tun=tun, clash_global=global_)
+            failed = netcheck.CheckResult("clash", False, "Clash TUN is off", 1)
+            text = netcheck.failure_text(account, [failed], "codex-work")
+            self.assertIn("multi-codex netcheck work off --clash off", text)
 
     def test_parse_loc(self):
         self.assertEqual(netcheck.parse_loc(b"ip=1\nloc=SG\nwarp=off\n"), "SG")
@@ -438,7 +482,8 @@ class ConfigTest(unittest.TestCase):
                "clash_api": {"address": "127.0.0.1:9097", "secret": "x"}}
         config = parse_config(json.dumps(raw), "t")
         data = config.to_dict()
-        self.assertEqual(data["accounts"]["a"]["net_check"], {"level": "strict", "country": "JP", "clash": True})
+        self.assertEqual(data["accounts"]["a"]["net_check"],
+                         {"level": "strict", "country": "JP", "clash_tun": True, "clash_global": True})
         self.assertNotIn("net_check", data["accounts"]["b"])
         self.assertEqual(data["clash_api"], {"address": "http://127.0.0.1:9097", "secret": "x"})
         self.assertEqual(parse_config(json.dumps(data), "t").to_dict(), data)
@@ -447,7 +492,8 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(config.find("a").net_check.level, "strict")
 
     def test_invalid_values(self):
-        for net_check in ({"level": "max"}, {"country": "USA"}, {"clash": "yes"}, "strict"):
+        for net_check in ({"level": "max"}, {"country": "USA"}, {"clash": "yes"}, {"clash_tun": "yes"},
+                          {"clash_global": 1}, "strict"):
             with self.subTest(net_check=net_check):
                 with self.assertRaises(ConfigError):
                     parse_config(json.dumps({"accounts": {"a": {"net_check": net_check}}}), "t")
@@ -456,6 +502,24 @@ class ConfigTest(unittest.TestCase):
             with self.subTest(api=api):
                 with self.assertRaises(ConfigError):
                     parse_config(json.dumps({"clash_api": api}), "t")
+
+    def test_yaml_scalar(self):
+        from multi_codex.clashfind import _yaml_scalar
+        self.assertEqual(_yaml_scalar(" 'it''s' # c"), "it's")
+        self.assertEqual(_yaml_scalar(' "a\\"b"'), 'a"b')
+        self.assertEqual(_yaml_scalar(" 127.0.0.1:9097  # c"), "127.0.0.1:9097")
+
+    def test_split_fields(self):
+        """feature-clash-split §8-1：新旧字段同时出现以新字段为准；只给一个新字段时另一项为关。"""
+        def parsed(net_check):
+            config = parse_config(json.dumps({"accounts": {"a": {"net_check": net_check}}}), "t")
+            check = config.find("a").net_check
+            return check.clash_tun, check.clash_global
+        self.assertEqual(parsed({"clash": True}), (True, True))
+        self.assertEqual(parsed({"clash": True, "clash_tun": True}), (True, False))
+        self.assertEqual(parsed({"clash": False, "clash_global": True}), (False, True))
+        config = parse_config(json.dumps({"accounts": {"a": {"net_check": {"clash_tun": True}}}}), "t")
+        self.assertNotIn("clash", config.to_dict()["accounts"]["a"]["net_check"])
 
     def test_clash_port_message(self):
         with self.assertRaises(ConfigError) as ctx:
@@ -540,7 +604,7 @@ class NetCheckCommandTest(NetCheckCliBase):
         self.ok("netcheck", "work", "--country", "SG")
         with open(os.path.join(self.state, "config.json")) as handle:
             saved = json.load(handle)["accounts"]["work"]["net_check"]
-        self.assertEqual(saved, {"level": "strict", "country": "SG", "clash": False})
+        self.assertEqual(saved, {"level": "strict", "country": "SG", "clash_tun": False, "clash_global": False})
         self.ok("netcheck", "work", "off")
         self.assertEqual(self.read(self.launcher_path), base)
 
@@ -556,6 +620,7 @@ class NetCheckCommandTest(NetCheckCliBase):
         self.assertEqual(self.run_cli("netcheck", "ghost", "basic").code, 1)
         result = self.ok("netcheck", "work", "--clash", "on")
         self.assertIn("Clash controller is not set", result.err)
+        self.assertIn("clash-api auto", result.err)
 
     def test_country_on_off_account_warns(self):
         result = self.ok("netcheck", "work", "--country", "JP")
@@ -805,6 +870,238 @@ class LiveUsageNetCheckTest(NetCheckCliBase):
         self.assertEqual(result.code, 1, result)
         self.assertNotIn("network check failed", result.out + result.err)
         self.assertEqual(self.trace.count, 0)
+
+
+# ---------------------------------------------------------------- feature-clash-split：拆分开关与自动查找
+
+
+def command_line(argv):
+    """把参数列表拼成一行命令，格式与本平台的拆分方式（platform._split_command）对应。"""
+    if IS_WINDOWS:
+        return subprocess.list2cmdline(argv)
+    import shlex
+    return " ".join(shlex.quote(arg) for arg in argv)
+
+
+class ClashSplitCliTest(NetCheckCliBase):
+    """feature-clash-split §8-1、§8-4：命令行的两个开关与旧字段兼容。"""
+
+    def saved_check(self):
+        with open(os.path.join(self.state, "config.json")) as handle:
+            return json.load(handle)["accounts"]["work"].get("net_check")
+
+    def test_flags(self):
+        self.ok("netcheck", "work", "--clash", "on")
+        check = self.saved_check()
+        self.assertTrue(check["clash_tun"] and check["clash_global"])
+        self.ok("netcheck", "work", "--clash", "off")
+        self.ok("netcheck", "work", "--clash-tun", "on")
+        check = self.saved_check()
+        self.assertEqual((check["clash_tun"], check["clash_global"]), (True, False))
+        result = self.run_cli("netcheck", "work", "--clash", "on", "--clash-tun", "off")
+        self.assertEqual(result.code, 2, result)
+        result = self.ok("netcheck", "work", "--clash-tun", "off", "--clash-global", "on")
+        self.assertIn("without TUN", result.err)
+        path = os.path.join(self.state, "config.json")
+        before = self.read(path)
+        self.run_cli("netcheck", "work")  # 接口未设置，检查本身不通过（退出 5），这里只看配置没被改写
+        self.assertEqual(self.read(path), before)
+
+    def test_legacy_field_kept_until_changed(self):
+        path = os.path.join(self.state, "config.json")
+        with open(path) as handle:
+            data = json.load(handle)
+        data["accounts"]["work"]["net_check"] = {"level": "off", "clash": True}
+        with open(path, "w") as handle:
+            json.dump(data, handle)
+        # 手改配置让启动命令过期，第一次会顺带更新启动命令；两次都不改写配置里的旧字段。
+        self.ok("netcheck", "work", "--clash", "on")
+        self.assertEqual(self.saved_check(), {"level": "off", "clash": True})
+        result = self.ok("netcheck", "work", "--clash", "on")
+        self.assertIn("already up to date", result.out + result.err)
+        self.assertEqual(self.saved_check(), {"level": "off", "clash": True})
+        self.ok("netcheck", "work", "--clash-tun", "off")
+        check = self.saved_check()
+        self.assertNotIn("clash", check)
+        self.assertEqual((check["clash_tun"], check["clash_global"]), (False, True))
+
+
+class ClashFindTest(NetCheckCliBase):
+    """feature-clash-split §8-6：`clash-api auto` 与 netcheck 开启时的自动查找。"""
+
+    def setUp(self):
+        super().setUp()
+        self.mihomo = MihomoServer()
+        self.addCleanup(self.mihomo.stop)
+
+    def processes(self, *argvs):
+        with open(self.env["MULTI_CODEX_TEST_CLASH_PROCESSES"], "w") as handle:
+            json.dump([{"ProcessId": 100 + index, "Name": os.path.basename(argv[0]),
+                        "CommandLine": command_line(argv)} for index, argv in enumerate(argvs)], handle)
+
+    def saved_api(self):
+        with open(os.path.join(self.state, "config.json")) as handle:
+            return json.load(handle).get("clash_api")
+
+    def temp_dir(self):
+        import shutil
+        import tempfile
+        directory = tempfile.mkdtemp(prefix="mcf-")
+        self.addCleanup(shutil.rmtree, directory, True)
+        return directory
+
+    def write_file(self, path, text):
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as handle:
+            handle.write(text)
+
+    def http(self, address):
+        return "http://" + address
+
+    def test_tcp_flag_forms(self):
+        for argv in (["/opt/mihomo", "-ext-ctl", self.mihomo.address],
+                     ["/opt/mihomo", "-ext-ctl=" + self.mihomo.address],
+                     ["/opt/mihomo", "--ext-ctl", self.mihomo.address]):
+            with self.subTest(argv=argv):
+                self.ok("clash-api", "off")
+                self.processes(argv)
+                result = self.ok("clash-api", "auto")
+                self.assertIn("found Clash controller", result.err)
+                self.assertEqual(self.saved_api()["address"], self.http(self.mihomo.address))
+
+    @POSIX_ONLY
+    def test_unix_socket(self):
+        directory = self.temp_dir()
+        server = MihomoServer(os.path.join(directory, "m.sock"))
+        self.addCleanup(server.stop)
+        self.processes(["/opt/verge-mihomo", "-ext-ctl-unix", os.path.join(directory, "m.sock")])
+        self.ok("clash-api", "auto")
+        self.assertEqual(self.saved_api(), {"address": "unix:" + os.path.join(directory, "m.sock")})
+        self.ok("clash-api", "off")
+        self.processes(["/opt/verge-mihomo", "-d", directory, "-ext-ctl-unix", "m.sock"])
+        self.ok("clash-api", "auto")
+        self.assertEqual(self.saved_api()["address"], "unix:" + os.path.join(directory, "m.sock"))
+
+    def test_config_file_and_secret_flag(self):
+        directory = self.temp_dir()
+        config = os.path.join(directory, "my config.yaml")
+        self.write_file(config, "mixed-port: 7890\nexternal-controller: {}\nsecret: other\n".format(
+            self.mihomo.address))
+        self.processes(["/opt/clash-meta", "-f", config])
+        self.ok("clash-api", "auto")
+        self.assertEqual(self.saved_api()["address"], self.http(self.mihomo.address))
+        # -secret 覆盖文件里的 secret；-v 输出里不得出现 secret 原文
+        self.ok("clash-api", "off")
+        self.mihomo.server.secret = "s3cretflag"
+        self.processes(["/opt/clash-meta", "-f", config, "-secret", "s3cretflag"])
+        result = self.ok("clash-api", "auto", "-v")
+        self.assertNotIn("s3cretflag", result.out + result.err)
+        self.assertEqual(self.saved_api()["secret"], "s3cretflag")
+        self.assertIn("secret set", self.ok("clash-api").out)
+
+    def test_first_dead_second_ok(self):
+        dead = "127.0.0.1:{}".format(closed_port())
+        self.processes(["/opt/mihomo", "-ext-ctl", dead], ["/opt/mihomo2", "-ext-ctl", self.mihomo.address])
+        result = self.ok("clash-api", "auto", "-v")
+        self.assertIn(dead, result.err)
+        self.assertEqual(self.saved_api()["address"], self.http(self.mihomo.address))
+
+    def test_not_found_and_dry_run(self):
+        result = self.run_cli("clash-api", "auto")
+        self.assertEqual(result.code, 1, result)
+        self.assertIn("no working Clash", result.err)
+        self.assertIsNone(self.saved_api())
+        self.processes(["/opt/mihomo", "-ext-ctl", self.mihomo.address])
+        result = self.ok("clash-api", "auto", "--dry-run")
+        self.assertIn("found Clash controller", result.err)
+        self.assertIsNone(self.saved_api())
+        result = self.run_cli("clash-api", "auto", "--secret-stdin")
+        self.assertEqual(result.code, 2, result)
+
+    def test_ignored_candidates(self):
+        directory = self.temp_dir()
+        config = os.path.join(directory, "c.yaml")
+        self.write_file(config, "external-controller: {}\n".format(self.mihomo.address))
+        self.processes(["/usr/bin/tail", "-f", config],
+                       ["/opt/mihomo", "-ext-ctl", "10.0.0.1:9090"],
+                       ["/opt/mihomo", "-f", "rel.yaml", "-ext-ctl-unix", "rel.sock"])
+        result = self.run_cli("clash-api", "auto", "-v")
+        self.assertEqual(result.code, 1, result)
+        self.assertIn("10.0.0.1:9090 (process mihomo): not a local address, skipped", result.err)
+        self.assertNotIn("rel.yaml", result.err)  # 相对 -f 按进程当前目录解析，拿不到，不读
+        if not IS_WINDOWS:
+            self.assertIn("relative path and the home directory is unknown", result.err)
+        self.assertNotIn(self.mihomo.address, result.err)
+
+    @unittest.skipUnless(IS_WINDOWS or sys.platform == "darwin", "no known Clash Verge config path here")
+    def test_known_config_file(self):
+        if IS_WINDOWS:
+            base = os.path.join(self.env["APPDATA"], "io.github.clash-verge-rev.clash-verge-rev")
+        else:
+            base = os.path.join(self.home, "Library", "Application Support", "io.github.clash-verge-rev.clash-verge-rev")
+        self.mihomo.server.secret = "filesecret"
+        lines = ['external-controller: "{}"  # 注释'.format(self.mihomo.address),
+                 "profile:", "  external-controller: 127.0.0.1:{}".format(closed_port()),
+                 "secret: filesecret"]
+        if not IS_WINDOWS:
+            lines.append("external-controller-unix: rel.sock")
+        self.write_file(os.path.join(base, "config.yaml"), "\n".join(lines) + "\n")
+        result = self.ok("clash-api", "auto", "-v")
+        self.assertEqual(self.saved_api(), {"address": self.http(self.mihomo.address), "secret": "filesecret"})
+        self.assertNotIn("filesecret", result.out + result.err)
+        if not IS_WINDOWS:
+            self.assertIn("unix:" + os.path.join(base, "rel.sock"), result.err)
+
+    def test_secret_not_sendable(self):
+        """secret 含中文时 http.client 编不进请求头：该候选记为失败，继续试下一个，不出 traceback。"""
+        self.processes(["/opt/mihomo", "-ext-ctl", "127.0.0.1:{}".format(closed_port()), "-secret", "密码"],
+                       ["/opt/mihomo2", "-ext-ctl", self.mihomo.address])
+        result = self.ok("clash-api", "auto", "-v")
+        self.assertIn("cannot be sent in an HTTP header", result.err)
+        self.assertNotIn("Traceback", result.err)
+        self.assertNotIn("密码", result.out + result.err)
+        self.assertEqual(self.saved_api()["address"], self.http(self.mihomo.address))
+
+    def test_netcheck_finds_when_unset(self):
+        self.processes(["/opt/mihomo", "-ext-ctl", self.mihomo.address])
+        self.ok("netcheck", "work", "basic")
+        self.ok("proxy", "work", self.proxy.url)
+        self.assertIsNone(self.saved_api())
+        result = self.ok("netcheck", "work", "--clash-tun", "on")
+        self.assertIn("found Clash controller", result.err)
+        self.assertEqual(self.saved_api()["address"], self.http(self.mihomo.address))
+
+
+class ProcessListTest(unittest.TestCase):
+    """feature-clash-split §8-7、7a：ps 输出拆分与真实进程枚举。"""
+
+    def test_split_ps_command(self):
+        from multi_codex import platform
+        line = ("/Library/Application Support/clash-verge-service/cores/verge-mihomo -d "
+                "/Users/u/Library/Application Support/io.github.clash-verge-rev.clash-verge-rev -f "
+                "/Users/u/Library/Application Support/io.github.clash-verge-rev.clash-verge-rev/clash-verge.yaml "
+                "-ext-ctl-unix /var/run/clash-verge-service/users/501/verge-mihomo.sock")
+        self.assertEqual(platform.split_ps_command("/a b/mihomo -d  /x  y -f /z"),
+                         ["/a b/mihomo", "-d", "/x  y", "-f", "/z"])
+        argv = platform.split_ps_command(line)
+        self.assertEqual(argv, [
+            "/Library/Application Support/clash-verge-service/cores/verge-mihomo",
+            "-d", "/Users/u/Library/Application Support/io.github.clash-verge-rev.clash-verge-rev",
+            "-f", "/Users/u/Library/Application Support/io.github.clash-verge-rev.clash-verge-rev/clash-verge.yaml",
+            "-ext-ctl-unix", "/var/run/clash-verge-service/users/501/verge-mihomo.sock"])
+
+    def test_real_process_list(self):
+        import uuid
+        from multi_codex import platform
+        saved = os.environ.pop(platform.TEST_CLASH_PROCESSES_ENV, None)
+        if saved is not None:
+            self.addCleanup(os.environ.__setitem__, platform.TEST_CLASH_PROCESSES_ENV, saved)
+        marker = "mc-marker-" + uuid.uuid4().hex
+        child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)", marker])
+        self.addCleanup(child.wait)
+        self.addCleanup(child.kill)
+        result = platform.list_process_argv()
+        self.assertTrue(any(marker in " ".join(argv) for argv in result))
 
 
 if __name__ == "__main__":
