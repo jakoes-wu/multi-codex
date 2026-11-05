@@ -20,7 +20,8 @@ from typing import Dict, List, Optional, Tuple
 
 from . import (__version__, accounts, apps, binding, completion, doctor, identity, launcher, migrate,
                platform, sessions, shellpath, switch, usage)
-from .actions import CREATE, DELETE, UNCHANGED, UPDATE, Action, error, hint, info, print_action, warn
+from .actions import (CREATE, DELETE, LOG_PREFIX, UNCHANGED, UPDATE, Action, error, hint, info, print_action,
+                      warn)
 from .config import (DEFAULT_SHARED_DIR, DEFAULT_SHARED_ITEMS, NET_CHECK_LEVELS, Account, ClashApi, Config,
                      ConfigError, is_socks, is_unshareable, load_config, normalize_clash_address, normalize_country,
                      normalize_proxy, parse_config, unique_items, validate_env_key, validate_env_value,
@@ -117,14 +118,14 @@ COMMAND_EXAMPLES: Dict[str, Tuple[Tuple[str, str], ...]] = {
     ),
     "netcheck": (
         ("multi-codex netcheck work", "show the setting and test it"),
-        ("multi-codex netcheck work basic", "need the proxy port open"),
         ("multi-codex netcheck work strict --country JP", "also exit country JP"),
+        ("multi-codex netcheck work --clash-tun on", "only Clash TUN (not direct)"),
         ("multi-codex netcheck work off --clash off", "turn the check off"),
     ),
     "clash-api": (
         ("multi-codex clash-api", "show the controller"),
-        ("multi-codex clash-api 127.0.0.1:9097", "set it"),
-        ("multi-codex clash-api 127.0.0.1:9097 --secret-stdin", "with a secret"),
+        ("multi-codex clash-api auto", "find the running Clash"),
+        ("multi-codex clash-api 127.0.0.1:9097 --secret-stdin", "set it by hand"),
         ("multi-codex clash-api off", "clear it"),
     ),
     "rename": (
@@ -300,7 +301,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_netcheck.add_argument("--country", metavar="CC",
                             help="two-letter country code the strict level requires (default US)")
     p_netcheck.add_argument("--clash", choices=("on", "off"),
-                            help="also require Clash / mihomo in global mode with TUN on")
+                            help="both Clash checks: TUN on and global mode (same as --clash-tun and "
+                                 "--clash-global together)")
+    p_netcheck.add_argument("--clash-tun", choices=("on", "off"),
+                            help="require Clash / mihomo TUN on and a mode other than direct")
+    p_netcheck.add_argument("--clash-global", choices=("on", "off"),
+                            help="require Clash / mihomo in global mode")
     _add_dry_run(p_netcheck)
     _add_verbose(p_netcheck)
 
@@ -421,7 +427,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_clash = sub.add_parser("clash-api", description=COMMAND_SUMMARY["clash-api"])
     p_clash.add_argument("address", nargs="?",
                          help="HOST:PORT of external-controller, unix:/PATH, \\\\.\\pipe\\NAME (Windows), "
-                              "or off")
+                              "auto (find the running Clash / mihomo on this machine) or off")
     p_clash.add_argument("--secret-stdin", action="store_true",
                          help="read the controller secret from one line of standard input; without it the "
                               "secret is cleared")
@@ -617,7 +623,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         # 以下两种只读模式不加锁，未完成的迁移或 restore 也不拦。
         if args.command == "env" and not (args.assignments or args.unset or args.clear):
             return cmd_env_list(args.name)
-        if args.command == "netcheck" and args.level is None and args.country is None and args.clash is None:
+        if args.command == "netcheck" and args.level is None and args.country is None and args.clash is None \
+                and args.clash_tun is None and args.clash_global is None:
             return cmd_netcheck_show(args.name)
         if args.command == "clash-api" and args.address is None:
             if args.secret_stdin:
@@ -629,6 +636,9 @@ def main(argv: Optional[List[str]] = None) -> int:
             return cmd_bind_list()
         if _blocked_by_migration(args, notice):
             return accounts.EXIT_ERROR
+        found = _prepare_clash_find(args)
+        if found is not None:
+            return found
         with WriteLock():
             # 加锁前的检查与加锁之间，另一条命令可能刚开始一次迁移或 restore，拿到锁后再确认一次。
             if _blocked_by_migration(args, migrate.pending_journal_notice()):
@@ -1703,8 +1713,13 @@ def _apply_netcheck_changes(config: Config, account: Account, args: argparse.Nam
             check.country = normalize_country(args.country)
         except ValueError as exc:
             raise UsageError(str(exc))
+    _check_clash_flags(args)
     if args.clash is not None:
-        check.clash = args.clash == "on"
+        check.clash_tun = check.clash_global = args.clash == "on"
+    if args.clash_tun is not None:
+        check.clash_tun = args.clash_tun == "on"
+    if args.clash_global is not None:
+        check.clash_global = args.clash_global == "on"
     if check.level in ("basic", "strict") and "://" not in account.proxy:
         raise UsageError("the {} check needs a proxy, but the proxy of {} is {}; set one first, e.g. "
                          "`multi-codex proxy {} 7901`".format(check.level, account.name, account.proxy, account.name))
@@ -1714,14 +1729,91 @@ def _apply_netcheck_changes(config: Config, account: Account, args: argparse.Nam
         # 未开启的账号不保存检查设置（Account.to_dict 只在开启时写 net_check），明说一句，免得以为已记下。
         warn("the network check of {} is off, so --country is not saved; turn it on with "
              "`multi-codex netcheck {} strict --country {}`".format(account.name, account.name, check.country))
+    if check.clash_global and not check.clash_tun:
+        # 只查全局防不住直连回落：Codex 不走代理端口时 Clash 根本接不到这些流量。每次写都提醒，不只在改动时。
+        warn("global mode without TUN only covers traffic sent to the proxy port; a direct connection is not "
+             "caught. Add --clash-tun on to cover it")
+    found = getattr(args, "found_clash", None)
+    if check.clash and config.clash_api is not None and found is not None:
+        # 加锁前找到了接口，但等锁期间另一条命令已经设好了接口：不覆盖，说明一句，免得以为已写入。
+        info("a Clash controller was set meanwhile ({}); the one found is not used".format(config.clash_api.address))
     if check.clash and config.clash_api is None:
-        # 允许先设账号再设接口；启动时会失败并提示设置接口。
-        warn("the Clash controller is not set; launches of {} will be refused until you run "
-             "`multi-codex clash-api ADDRESS`".format(account.name))
+        if found is not None:
+            # 加锁前已找到本机 Clash 接口（_prepare_clash_find），随本次写入一起保存。
+            config.clash_api = found
+        else:
+            # 允许先设账号再设接口；启动时会失败并提示设置接口。
+            warn("the Clash controller is not set; launches of {} will be refused until you run "
+                 "`multi-codex clash-api auto` or `multi-codex clash-api ADDRESS`".format(account.name))
+
+
+def _check_clash_flags(args: argparse.Namespace) -> None:
+    """--clash 是两项一起的简写，与单项开关同时给出时含义不清，直接拒绝（退出 2）。"""
+    if args.clash is not None and (args.clash_tun is not None or args.clash_global is not None):
+        raise UsageError("--clash sets both Clash checks; use it alone or use --clash-tun / --clash-global")
+
+
+def _prepare_clash_find(args: argparse.Namespace) -> Optional[int]:
+    """加锁前找本机 Clash 接口（feature-clash-split §5.1.4），结果放在 args.found_clash 供写命令使用。
+
+    只在两种情况下查找：`clash-api auto`；netcheck 开启 Clash 检查而接口尚未设置。查找要枚举进程
+    （Windows 上最长等 90 秒），所以放在迁移检查之后、写锁之前，不长时间占着锁。返回 None 继续，
+    返回整数时调用方直接以它退出；参数冲突抛 UsageError（退出 2），在查找之前判断，免得白等。
+    """
+    args.found_clash = None
+    if args.command == "clash-api" and args.address is not None and args.address.lower() == "auto":
+        if args.secret_stdin:
+            raise UsageError("--secret-stdin cannot be used with auto; mihomo does not check the secret on a "
+                             "unix socket or named pipe, and a TCP secret is read from Clash itself")
+        return _find_clash(args, required=True)
+    if args.command != "netcheck":
+        return None
+    _check_clash_flags(args)
+    if "on" not in (args.clash, args.clash_tun, args.clash_global):
+        return None
+    config, exists = load_config()
+    if not exists or config.find(args.name) is None or config.clash_api is not None:
+        # 账号未登记交给 dispatch 照常报错；接口已设置则不覆盖。
+        return None
+    _find_clash(args, required=False)
+    return None
+
+
+def _find_clash(args: argparse.Namespace, required: bool) -> Optional[int]:
+    from . import clashfind
+    api, detail, notes = clashfind.find_controller()
+    if api is None:
+        if not required:
+            if args.verbose:
+                for note in notes:
+                    _find_note("  " + note, prefix=False)
+            return None
+        error("no working Clash / mihomo controller found; is Clash running? Set one by hand with "
+              "`multi-codex clash-api ADDRESS`")
+        for note in notes or ["no Clash / mihomo process or configuration file was found"]:
+            _find_note("  " + note, prefix=False)
+        return accounts.EXIT_ERROR
+    if args.verbose:
+        for note in notes:
+            _find_note("  " + note, prefix=False)
+    _find_note("found Clash controller {} ({})".format(api.address, detail))
+    args.found_clash = api
+    return None
+
+
+def _find_note(message: str, prefix: bool = True) -> None:
+    """查找过程的说明写 stderr：stdout 留给写命令的动作行；说明里只有地址与来源，不含 secret。"""
+    sys.stdout.flush()
+    sys.stderr.write("{}{}\n".format(LOG_PREFIX + " " if prefix else "", message))
 
 
 def _clash_api_from_args(args: argparse.Namespace) -> Optional[ClashApi]:
-    """clash-api 的写形态：返回新设置，off 返回 None。secret 只从标准输入读，不接受命令行参数（ps 可见）。"""
+    """clash-api 的写形态：返回新设置，off 返回 None。secret 只从标准输入读，不接受命令行参数（ps 可见）。
+
+    auto 时返回加锁前已找到的设置（_prepare_clash_find）。
+    """
+    if args.address.lower() == "auto":
+        return args.found_clash
     if args.address.lower() == "off":
         if args.secret_stdin:
             raise UsageError("--secret-stdin cannot be used with off")

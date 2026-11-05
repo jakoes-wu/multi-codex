@@ -58,7 +58,16 @@ class CheckResult(NamedTuple):
 
 
 class CheckFailure(Exception):
-    """检查项未通过；消息即对外的失败说明。"""
+    """检查项未通过；消息即对外的失败说明。
+
+    kind 是失败类别，只有 Clash 接口读取设置（read_clash_state）：unreachable 连不上 / 超时，auth 被拒（401），
+    http 其它非 200，not-clash 回包不像 mihomo，other 其它。启动检查只用消息文字；自动查找（clashfind）
+    按 kind 写每个候选的结果说明，不靠匹配文字。
+    """
+
+    def __init__(self, message: str, kind: str = "other") -> None:
+        super().__init__(message)
+        self.kind = kind
 
 
 def skip_mode() -> Optional[str]:
@@ -71,15 +80,22 @@ def skip_mode() -> Optional[str]:
 
 
 def scope_text(account: Account) -> str:
-    """提示行括号里的检查范围：basic / `strict, 国家`，开了 Clash 再加 `, clash`；只开 Clash 时写 `clash`。"""
+    """提示行括号里的检查范围：basic / `strict, 国家`，开了 Clash 再加一段；只开 Clash 时只有这一段。
+
+    Clash 段：两项都开写 `clash`（与拆分前的写法相同），只开一项写 `clash tun` / `clash global`。
+    """
     check = account.net_check
     parts = []
     if check.level == "basic":
         parts.append("basic")
     elif check.level == "strict":
         parts.extend(["strict", check.country])
-    if check.clash:
+    if check.clash_tun and check.clash_global:
         parts.append("clash")
+    elif check.clash_tun:
+        parts.append("clash tun")
+    elif check.clash_global:
+        parts.append("clash global")
     return ", ".join(parts)
 
 
@@ -92,7 +108,7 @@ def run_checks(config: Config, account: Account, stop_on_failure: bool) -> List[
     check = account.net_check
     steps = []
     if check.clash:
-        steps.append((ITEM_CLASH, lambda: _check_clash(config)))
+        steps.append((ITEM_CLASH, lambda: _check_clash(config, check.clash_tun, check.clash_global)))
     if check.level in ("basic", "strict"):
         steps.append((ITEM_PORT, lambda: _check_port(account.proxy)))
     if check.level == "strict":
@@ -338,26 +354,50 @@ def _classify(exc: BaseException) -> str:
 # ---------------------------------------------------------------- Clash / mihomo
 
 
-def _check_clash(config: Config) -> str:
-    """GET /configs，要求 mode=global 且 tun.enable=true（mihomo v1.19.32 hub/route/configs.go）。
+def _check_clash(config: Config, need_tun: bool, need_global: bool) -> str:
+    """按账号开启的两项判定 Clash 状态（feature-clash-split §5.1.2）。只读，不修改 Clash 的任何设置。
 
-    TUN 启动失败时 mihomo 会把 tun.enable 写回 false（listener/listener.go），所以它反映的是实际状态。
-    只读，不修改 Clash 的任何设置。
+    need_global：mode 必须是 global。need_tun：tun.enable 必须为真；只要求 TUN 时还要拒绝 direct 模式——
+    direct 下 TUN 接住的流量照样直连出去，等于没开代理。只要求全局时不看 TUN（设置时已提醒其局限）。
     """
     api = config.clash_api
     if api is None:
-        raise CheckFailure("Clash controller is not set; run `multi-codex clash-api ADDRESS`")
+        raise CheckFailure("Clash controller is not set; run `multi-codex clash-api auto` or "
+                           "`multi-codex clash-api ADDRESS`")
+    mode, tun_on = read_clash_state(api.address, api.secret)
+    if need_global and mode != "global":
+        raise CheckFailure("Clash mode is {}, expected global".format(mode))
+    if need_tun and not tun_on:
+        raise CheckFailure("Clash TUN is off")
+    if need_tun and not need_global and mode == "direct":
+        raise CheckFailure("Clash mode is direct; TUN would pass traffic through without the proxy")
+    return "mode={}, tun {}".format(mode, "on" if tun_on else "off")
+
+
+def read_clash_state(address: str, secret: str) -> Tuple[str, bool]:
+    """GET /configs，返回 (mode 小写, tun.enable 是否为真)（mihomo v1.19.32 hub/route/configs.go）。
+
+    TUN 启动失败时 mihomo 会把 tun.enable 写回 false（listener/listener.go），所以它反映的是实际状态。
+    失败抛 CheckFailure 并按类别设 kind；启动检查与 `clash-api auto` 的候选验证共用这一个读法。
+    """
     try:
-        status, body = _clash_get(api.address, api.secret)
-    except CheckFailure:
-        raise
+        status, body = _clash_get(address, secret)
+    except CheckFailure as exc:
+        # _pipe_get 自己抛的（管道超时等）都属于连不上。
+        raise CheckFailure(str(exc), "unreachable")
     except (OSError, http.client.HTTPException) as exc:
-        raise CheckFailure("Clash controller {}: {}".format(api.address, _classify(exc)))
+        raise CheckFailure("Clash controller {}: {}".format(address, _classify(exc)), "unreachable")
+    except UnicodeError:
+        # http.client 按 latin-1 编码请求头，secret 含中文等字符时在发送前就抛 UnicodeEncodeError；
+        # 自动查找会从别人写的配置文件里读到这种 secret，不兜住会带 traceback 退出、后面的候选也不再试。
+        # 说明里不带 secret 原文。
+        raise CheckFailure("Clash controller {}: the secret has characters that cannot be sent in an HTTP "
+                           "header".format(address), "other")
     if status == 401:
         raise CheckFailure("Clash controller {} rejected the request (401): secret missing or wrong; "
-                           "set it with `multi-codex clash-api ADDRESS --secret-stdin`".format(api.address))
+                           "set it with `multi-codex clash-api ADDRESS --secret-stdin`".format(address), "auth")
     if status != 200:
-        raise CheckFailure("Clash controller {} returned HTTP {}".format(api.address, status))
+        raise CheckFailure("Clash controller {} returned HTTP {}".format(address, status), "http")
     try:
         data = json.loads(body.decode("utf-8"))
     except ValueError:
@@ -366,12 +406,8 @@ def _check_clash(config: Config) -> str:
     tun = data.get("tun") if isinstance(data, dict) else None
     if not isinstance(mode, str) or not isinstance(tun, dict) or "enable" not in tun:
         raise CheckFailure("Clash controller {} gave an unexpected response (no mode / tun.enable); "
-                           "is it a Clash / mihomo controller?".format(api.address))
-    if mode.lower() != "global":
-        raise CheckFailure("Clash mode is {}, expected global".format(mode))
-    if tun.get("enable") is not True:
-        raise CheckFailure("Clash TUN is off")
-    return "mode=global, tun on"
+                           "is it a Clash / mihomo controller?".format(address), "not-clash")
+    return mode.lower(), tun.get("enable") is True
 
 
 def _clash_get(address: str, secret: str) -> Tuple[int, bytes]:

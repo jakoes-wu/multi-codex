@@ -1,5 +1,7 @@
 # 启动前网络检查
 
+> 2026-11-05 注记：Clash 检查已拆成 TUN / 全局两项并新增 `clash-api auto`，见 `docs/feature/feature-clash-split.md`；本文 `--clash on` 的描述仍有效（现为两项一起开关的简写），配置字段 `clash` 改为 `clash_tun` / `clash_global`。
+>
 > 2026-11-04 注记：方案起草中，代码待落地。基线 main `384cb04`（PR #39 Windows 支持合并后）。本文所有 `file:line` 锚点均指该基线；上游 Codex 锚点指 `~/tmp/codex-upstream/src` 的 `f2b94ef`，mihomo 锚点指 `~/tmp/src-mihomo/v1.19.32`。
 >
 > 2026-11-04 第 4 轮评审收敛（0 高 0 中），D27–D32 低级已修订。

@@ -21,6 +21,14 @@ All notable changes to this project are documented here. The format follows
   code 1). Skip it once with `MULTI_CODEX_SKIP_NETCHECK=1`.
   It checks only at launch: it does not stop Codex from connecting directly if the proxy goes down later,
   and the desktop app and the VS Code extension are not covered.
+- The Clash check is two settings: `--clash-tun on` (TUN on and not in `direct` mode) and
+  `--clash-global on` (global mode); `--clash on|off` sets both, and an older `"clash": true` means both
+  and is rewritten as the two new fields the next time the configuration changes. A multi-codex older than
+  this release reading the new fields treats the Clash check as off, so do not mix versions on one machine.
+  Turning on global without TUN prints a warning.
+- `multi-codex clash-api auto` finds the controller of the running Clash / mihomo from its process arguments
+  and configuration files, tries each candidate, and saves the first that answers; turning a Clash check on
+  while no controller is set runs the same search.
 
 ### Changed
 

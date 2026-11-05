@@ -188,8 +188,8 @@ multi-codex migrate-default
 | `multi-codex rename 旧名 新名` | 给账号和启动命令改名；目录、登录与链接都不变 |
 | `multi-codex login 名称 [-- 参数]` | 用账号的环境运行 `codex login`，`--` 之后的参数交给 `codex login`；不需要 `~/.local/bin` 在 `PATH` 中 |
 | `multi-codex proxy 名称 端口\|URL\|off\|inherit` | 设置账号的代理 |
-| `multi-codex netcheck 名称 [off\|basic\|strict] [--country CC] [--clash on\|off]` | 设置账号的[启动前网络检查](#启动前网络检查)；只给名称时显示设置并立即检查 |
-| `multi-codex clash-api [地址\|off] [--secret-stdin]` | 显示或设置 `netcheck --clash on` 使用的 Clash / mihomo 控制接口 |
+| `multi-codex netcheck 名称 [off\|basic\|strict] [--country CC] [--clash on\|off] [--clash-tun on\|off] [--clash-global on\|off]` | 设置账号的[启动前网络检查](#启动前网络检查)；只给名称时显示设置并立即检查 |
+| `multi-codex clash-api [地址\|auto\|off] [--secret-stdin]` | 显示或设置 `netcheck` 的 Clash 检查使用的 Clash / mihomo 控制接口；`auto` 自动找正在运行的那个 |
 | `multi-codex remove 名称` | 注销账号，删除它的启动命令。**账号目录会保留** |
 | `multi-codex apply [-f 文件]` | 按配置（或指定文件）收敛全部账号 |
 | `multi-codex list [-v] [--json]` | 列出账号：登录身份、代理、共享、额度、最近使用时间和状态；`-v` 输出完整表格 |
@@ -412,18 +412,23 @@ multi-codex app work                       # 打开一个独立的 Codex 桌面�
 | ---- | ---- |
 | `multi-codex netcheck 名称 basic` | 账号代理的端口能建立 TCP 连接（超时 3 秒） |
 | `multi-codex netcheck 名称 strict [--country CC]` | 端口；再分别直连（不走代理）和经代理访问 `https://chatgpt.com/cdn-cgi/trace`，两次返回的 `loc` 都要等于 `CC`（默认 `US`）。这一档不支持 `https://` 代理，请用 `http://` 或 `socks5://` |
-| `multi-codex netcheck 名称 --clash on` | Clash / mihomo 处于全局模式并开着 TUN，经它的外部控制接口 `GET /configs` 读取；与档位相互独立 |
+| `multi-codex netcheck 名称 --clash-tun on` | Clash / mihomo 开着 TUN，且不是 `direct` 模式，经它的外部控制接口 `GET /configs` 读取；与档位相互独立 |
+| `multi-codex netcheck 名称 --clash-global on` | Clash / mihomo 处于全局模式。不同时开 `--clash-tun on` 时只管得到发往代理端口的流量，设置时会给出提醒 |
+| `multi-codex netcheck 名称 --clash on` | 两项 Clash 检查都开（上面两项的简写；`--clash off` 两项都关）。配置里旧的 `"clash": true` 视为两项都开 |
 | `multi-codex netcheck 名称 off --clash off` | 关闭 |
 
 ```sh
 multi-codex proxy work 7901
 multi-codex netcheck work strict              # 开启
 multi-codex netcheck work                     # 显示设置并立即逐项检查（退出 0 或 5）
-multi-codex clash-api 127.0.0.1:9097 --secret-stdin < secret.txt   # 设置 --clash on 用的控制接口
+multi-codex clash-api auto                    # 自动找正在运行的 Clash / mihomo 控制接口
+multi-codex clash-api 127.0.0.1:9097 --secret-stdin < secret.txt   # 或手动设置
 ```
 
 `clash-api` 接受 `主机:端口`、`unix:/路径`（macOS、Linux）或 `\\.\pipe\名称`（Windows）；secret 只从标准输入读取，
-保存在配置文件里。检查通过时在 stderr 打一行 `multi-codex: network check passed for account work (strict, US; 812 ms)`；
+保存在配置文件里。`clash-api auto` 从正在运行的 Clash / mihomo 进程的启动参数及其配置文件（macOS、Windows 上还有
+Clash Verge 的 `config.yaml`）里找控制接口，逐个用 `GET /configs` 试连，保存第一个有回应的；只采用本机地址。
+开启 Clash 检查时如果还没设置控制接口，也会这样自动找一次。检查通过时在 stderr 打一行 `multi-codex: network check passed for account work (strict, US; 812 ms)`；
 没通过时说明哪一项失败，并给出本次跳过的写法：`MULTI_CODEX_SKIP_NETCHECK=1 codex-work`（PowerShell：
 `try { $env:MULTI_CODEX_SKIP_NETCHECK=1; codex-work } finally { Remove-Item Env:MULTI_CODEX_SKIP_NETCHECK }`）。
 

@@ -95,7 +95,11 @@ class CliTestCase(unittest.TestCase):
             "MULTI_CODEX_TEST_SYSTEM_CONFIG": os.path.join(self.tmp, "etc-codex-config.toml"),
             "FAKE_PYTHON": sys.executable,
             "FAKE_APP_SERVER": os.path.join(ROOT, "tests", "fake_app_server.py"),
+            # 自动查找 Clash 接口时不读开发机 / CI 上真实的进程（feature-clash-split §7 第 7 条）。
+            "MULTI_CODEX_TEST_CLASH_PROCESSES": os.path.join(self.tmp, "clash-processes.json"),
         }
+        with open(self.env["MULTI_CODEX_TEST_CLASH_PROCESSES"], "w") as handle:
+            handle.write("[]")
         self.state = os.path.join(self.home, ".config", "multi-codex")
         if IS_WINDOWS:
             # 同时隔离 USERPROFILE / APPDATA / LOCALAPPDATA / ProgramData（ProgramData 只在测试里覆盖）。

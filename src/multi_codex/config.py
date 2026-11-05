@@ -429,14 +429,22 @@ class NetCheck(object):
 
     level：off 不检查代理；basic 只要求账号代理端口能连通；strict 另要求直连与经代理访问
     chatgpt.com/cdn-cgi/trace 得到的 loc 都等于 country。
-    clash：另要求 Clash / mihomo 为全局模式且 TUN 已开启，与 level 相互独立。
+    clash_tun：要求 Clash / mihomo 的 TUN 已开启且不是 direct 模式（direct 下 TUN 接住的流量照样直连）；
+    clash_global：要求 Clash / mihomo 为全局模式。两项与 level 相互独立（feature-clash-split §5.1.1）。
     country 在非 strict 档位也保存，切到 strict 时生效。
     """
 
-    def __init__(self, level: str = "off", country: str = DEFAULT_COUNTRY, clash: bool = False) -> None:
+    def __init__(self, level: str = "off", country: str = DEFAULT_COUNTRY, clash_tun: bool = False,
+                 clash_global: bool = False) -> None:
         self.level = level
         self.country = country
-        self.clash = clash
+        self.clash_tun = clash_tun
+        self.clash_global = clash_global
+
+    @property
+    def clash(self) -> bool:
+        """是否开启了任一项 Clash 检查。"""
+        return self.clash_tun or self.clash_global
 
     @property
     def active(self) -> bool:
@@ -444,10 +452,12 @@ class NetCheck(object):
         return self.level != "off" or self.clash
 
     def copy(self) -> "NetCheck":
-        return NetCheck(self.level, self.country, self.clash)
+        return NetCheck(self.level, self.country, self.clash_tun, self.clash_global)
 
     def to_dict(self) -> dict:
-        return {"level": self.level, "country": self.country, "clash": self.clash}
+        # 只写新字段：旧字段 clash 只读不写，配置有改动、整体重写时自然换成新写法。
+        return {"level": self.level, "country": self.country, "clash_tun": self.clash_tun,
+                "clash_global": self.clash_global}
 
 
 class ClashApi(object):
@@ -538,10 +548,20 @@ def _parse_net_check(value: object, where: str) -> NetCheck:
         country = normalize_country(value.get("country", DEFAULT_COUNTRY))
     except ValueError as exc:
         raise ConfigError("{}: 'net_check.country': {}".format(where, exc))
+    if "clash_tun" in value or "clash_global" in value:
+        # 新字段优先；同时残留的旧字段 clash 忽略。
+        flags = []
+        for key in ("clash_tun", "clash_global"):
+            flag = value.get(key, False)
+            if not isinstance(flag, bool):
+                raise ConfigError("{}: 'net_check.{}' must be true or false".format(where, key))
+            flags.append(flag)
+        return NetCheck(level, country, flags[0], flags[1])
+    # 旧写法 "clash": true 表示 TUN 与全局都要求，与拆分前的检查行为一致。
     clash = value.get("clash", False)
     if not isinstance(clash, bool):
         raise ConfigError("{}: 'net_check.clash' must be true or false".format(where))
-    return NetCheck(level, country, clash)
+    return NetCheck(level, country, clash, clash)
 
 
 def _parse_clash_api(value: object, source: str) -> Optional[ClashApi]:
