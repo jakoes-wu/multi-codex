@@ -1,5 +1,7 @@
 # 日常操作：shell 补全、run / path、每账号环境变量、共享项对照表（v0.4）
 
+> 2026-11-05 注记：补全新增参数与选项的取值（netcheck 档位、on/off、账号名、共享项名等），见 `docs/feature/feature-completion-values.md`。
+
 > 2026-10-01 注记：代码已落地（未提交，等待编译机验证）。
 > - 补全：`src/multi_codex/completion.py`。
 > - `run` / `path` / `env`：`src/multi_codex/cli.py` 中的 `cmd_run`、`cmd_path`、`cmd_env_list`、`_apply_env_changes`。

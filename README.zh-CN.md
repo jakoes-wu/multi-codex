@@ -277,7 +277,7 @@ multi-codex completion fish | source      # 写进 ~/.config/fish/config.fish
 
 PowerShell（Windows）里执行一次，写进配置文件：`multi-codex completion powershell | Out-String | Add-Content $PROFILE`。
 
-可以补全子命令、选项和已登记的账号名（包括邮箱形式的名字）。
+可以补全子命令、选项和已登记的账号名（包括邮箱形式的名字），以及参数和选项的取值：`netcheck` 档位、`on` / `off`、`clash-api auto|off`、`--config-from` 后的账号名、`--shared-exclude` / `--shared-include` 后的共享项名。上面 PowerShell 那条是把脚本复制进配置文件，升级 multi-codex 后要先删掉旧的那段再执行一次。
 
 ### 运行其它命令
 
