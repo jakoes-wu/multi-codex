@@ -1,6 +1,6 @@
 # 补全参数取值（选项值、档位、关键字、共享项名）
 
-> 2026-11-05 注记：方案已定、代码待落地。基线：main `ebef759`（0.14.0 发布后），以下 `file:line` 均指该基线。
+> 2026-11-05 注记：已合并（PR #43，main `1ec7eef`），随 0.15.0 发布；CI 三平台通过，fish（`complete -C`）与 PowerShell（`TabExpansion2`）行为用例均实跑。落地位置：`src/multi_codex/completion.py` 的 `value_spec`、`_value_functions`、四个 `*_script`；`src/multi_codex/cli.py` 的 `cmd_completion`（`--list-shared-items`）。以下 `file:line` 指方案基线 main `ebef759`（0.14.0 发布后）。
 
 ## 1. 背景
 
