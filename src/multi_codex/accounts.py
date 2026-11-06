@@ -97,8 +97,9 @@ def plan(old: Config, new: Config, *, config_exists: bool = True,
             continue
         directory = os.path.join(new_root, account.dir_name)
         actions.extend(_plan_account_dir(directory, assumed))
+        wrapper = new.agent_lock.wrapper if new.agent_lock is not None else None
         actions.extend(_plan_launcher(new_bin, account.name, directory, account.proxy, account.env,
-                                      account.net_check.active))
+                                      account.net_check.active, wrapper))
         if old_account is not None and old_bin != new_bin:
             actions.extend(_plan_launcher_delete(old_bin, old_account.name, planned_deletes,
                                                  "bin_dir changed"))
@@ -179,19 +180,30 @@ def _make_private_dir(directory: str) -> None:
 
 
 def _plan_launcher(bin_dir: str, name: str, directory: str, proxy: str,
-                   env: Optional[Dict[str, str]] = None, checked: bool = False) -> List[Action]:
-    """checked：账号开启了启动前网络检查，POSIX 启动命令要带检查段；Windows .cmd 不变（检查在 launch 里做）。"""
+                   env: Optional[Dict[str, str]] = None, checked: bool = False,
+                   wrapper: Optional[str] = None) -> List[Action]:
+    """checked：账号开启了启动前网络检查，POSIX 启动命令要带检查段；Windows .cmd 不变（检查在 launch 里做）。
+
+    wrapper 是打开的 agent-lock 切换器。Linux 上有 env 时模式是 0750，父目录必须已经 bind-bin，
+    否则返回错误动作且不写文件。写入仍只走 atomic_write。
+    """
     path = launcher.launcher_path(bin_dir, name)
+    locked = bool(wrapper)
     if platform.IS_WINDOWS:
         # python 或入口路径没法安全写进 .cmd 时按冲突处理（退出 3），不生成一个运行不了的启动命令
         unsafe = launcher.windows_unsafe_reason(name)
         if unsafe is not None:
             return [Action(CONFLICT, "launcher", path, unsafe)]
         python, entry = launcher.windows_command_paths()
-        content = launcher.render_windows(name, python, entry)
+        content = launcher.render_windows(name, python, entry, agent_lock=locked)
     else:
-        content = launcher.render(name, directory, proxy, env, net_check=checked)
-    mode = launcher.launcher_mode(env)
+        content = launcher.render(name, directory, proxy, env, net_check=checked, wrapper=wrapper)
+    mode = launcher.launcher_mode(env, agent_lock=locked)
+    if mode == launcher.LINUX_AGENT_LOCK_MODE:
+        # 父目录不合格就不排写入。组由 setgid 继承，这里不能改文件的属组。
+        reason = launcher.linux_bind_dir_error(os.path.dirname(path) or ".")
+        if reason:
+            return [Action(CONFLICT, "launcher", path, reason)]
     kind = entry_kind(path)
     if kind == KIND_MISSING:
         return [Action(CREATE, "launcher", path, run=_write_launcher(path, content, mode))]
@@ -200,7 +212,7 @@ def _plan_launcher(bin_dir: str, name: str, directory: str, proxy: str,
         return [Action(CONFLICT, "launcher", path, "already exists and is not managed by multi-codex")]
     if owner.casefold() != name.casefold():
         return [Action(CONFLICT, "launcher", path, "managed by multi-codex for account {!r}".format(owner))]
-    if launcher.launcher_file_ok(path, content, env):
+    if launcher.launcher_file_ok(path, content, env, agent_lock=locked):
         return [Action(UNCHANGED, "launcher", path)]
     return [Action(UPDATE, "launcher", path, run=_write_launcher(path, content, mode))]
 
@@ -332,12 +344,14 @@ def launcher_status(config: Config, name: str) -> str:
     if owner is None or owner.casefold() != name.casefold():
         return "conflict"
     env = account.env if account else {}
+    wrapper = config.agent_lock.wrapper if config.agent_lock is not None else None
+    locked = bool(wrapper)
     if platform.IS_WINDOWS:
         # 在 missing 判断之后：.cmd 缺失且路径不安全时 list 显示 missing、apply 返回 3
         if launcher.windows_unsafe_reason(name) is not None:
             return "conflict"
-        expected = launcher.render_windows(name, *launcher.windows_command_paths())
-        return "ok" if launcher.launcher_file_ok(path, expected, env) else "stale"
+        expected = launcher.render_windows(name, *launcher.windows_command_paths(), agent_lock=locked)
+        return "ok" if launcher.launcher_file_ok(path, expected, env, agent_lock=locked) else "stale"
     expected = launcher.render(name, account_dir(config, name), account.proxy if account else "inherit", env,
-                               net_check=account.net_check.active if account else False)
-    return "ok" if launcher.launcher_file_ok(path, expected, env) else "stale"
+                               net_check=account.net_check.active if account else False, wrapper=wrapper)
+    return "ok" if launcher.launcher_file_ok(path, expected, env, agent_lock=locked) else "stale"

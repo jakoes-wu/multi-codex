@@ -8,6 +8,7 @@ import argparse
 import difflib
 import json
 import os
+import re
 import shlex
 import shutil
 import signal
@@ -15,6 +16,7 @@ import subprocess
 import sys
 import time
 import unicodedata
+import urllib.parse
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 
@@ -22,10 +24,10 @@ from . import (__version__, accounts, apps, binding, completion, doctor, identit
                platform, sessions, shellpath, switch, usage)
 from .actions import (CREATE, DELETE, LOG_PREFIX, UNCHANGED, UPDATE, Action, error, hint, info, print_action,
                       warn)
-from .config import (DEFAULT_SHARED_DIR, DEFAULT_SHARED_ITEMS, NET_CHECK_LEVELS, Account, ClashApi, Config,
-                     ConfigError, is_socks, is_unshareable, load_config, normalize_clash_address, normalize_country,
-                     normalize_proxy, parse_config, unique_items, validate_env_key, validate_env_value,
-                     validate_name)
+from .config import (DEFAULT_SHARED_DIR, DEFAULT_SHARED_ITEMS, NET_CHECK_LEVELS, PROXY_INHERIT, PROXY_OFF,
+                     Account, AgentLock, ClashApi, Config, ConfigError, is_socks, is_unshareable, load_config,
+                     normalize_clash_address, normalize_country, normalize_proxy, parse_config, unique_items,
+                     validate_env_key, validate_env_value, validate_name)
 from .config import _valid_item as valid_shared_item  # 与配置解析用同一条名称规则
 from .fsutil import KIND_DIR, KIND_MISSING, display_path, entry_kind, expand
 from .lock import LockBusyError, WriteLock
@@ -70,6 +72,7 @@ COMMAND_GROUPS = (
         ("apply", "converge all accounts to the configuration"),
         ("init", "create or update the global settings"),
         ("clash-api", "set the Clash / mihomo controller used by the network check"),
+        ("agent-lock", "turn launchers on or off for agentnet"),
     )),
 )
 COMMAND_SUMMARY = {name: summary for _, commands in COMMAND_GROUPS for name, summary in commands}
@@ -127,6 +130,12 @@ COMMAND_EXAMPLES: Dict[str, Tuple[Tuple[str, str], ...]] = {
         ("multi-codex clash-api auto", "find the running Clash"),
         ("multi-codex clash-api 127.0.0.1:9097 --secret-stdin", "set it by hand"),
         ("multi-codex clash-api off", "clear it"),
+    ),
+    "agent-lock": (
+        ("multi-codex agent-lock", "show status"),
+        ("multi-codex agent-lock on", "turn it on"),
+        ("multi-codex agent-lock on --wrapper /usr/local/sbin/agent-lock", "set the path"),
+        ("multi-codex agent-lock off", "turn it off"),
     ),
     "rename": (
         ("multi-codex rename work client-a", "codex-work becomes codex-client-a"),
@@ -436,6 +445,12 @@ def build_parser() -> argparse.ArgumentParser:
     _add_dry_run(p_clash)
     _add_verbose(p_clash)
 
+    p_lock = sub.add_parser("agent-lock", description=COMMAND_SUMMARY["agent-lock"])
+    p_lock.add_argument("action", nargs="?", choices=("on", "off"),
+                        help="turn the launcher prefix on or off; omit to show enabled and wrapper")
+    p_lock.add_argument("--wrapper", metavar="PATH",
+                        help="absolute path of the agent-lock switcher")
+
     # 示例统一在这里挂到每个子命令上，不改上面各处 add_parser；RawDescriptionHelpFormatter 让示例保持换行与对齐，
     # 选项说明仍照常自动折行（argparse 在输出帮助时才读 formatter_class 与 epilog，事后赋值有效）。
     for name, command_parser in sub.choices.items():
@@ -632,6 +647,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             if args.secret_stdin:
                 raise UsageError("--secret-stdin needs an ADDRESS")
             return cmd_clash_api_show()
+        if args.command == "agent-lock" and args.action is None:
+            return cmd_agent_lock_show()
         if args.command == "use" and args.name is None:
             return cmd_use_show()
         if args.command == "bind" and args.name is None:
@@ -671,20 +688,22 @@ def main(argv: Optional[List[str]] = None) -> int:
 
 
 def _blocked_by_migration(args: argparse.Namespace, notice: Optional[str]) -> bool:
+    # 没有 --dry-run 的写命令（agent-lock）不能直接读 args.dry_run。
+    dry_run = getattr(args, "dry_run", False)
     # 迁移中途禁止其它写命令，防止根目录或账号在迁移过程中被改动。
-    if notice and args.command != "migrate-default" and not args.dry_run:
+    if notice and args.command != "migrate-default" and not dry_run:
         error("finish the unfinished migration before running `{}`".format(args.command))
         return True
     # restore 做到一半时 ~/.codex 可能不存在或是普通目录，这时 use 会新建它、migrate-default 的预检也能通过，
     # restore 就再也无法完成。每次都重新读取标记：拿到锁之后的第二次检查也要看到别的命令刚写出的标记。
     journal = switch.load_restore_journal()
-    if journal and not args.dry_run and not (
+    if journal and not dry_run and not (
             args.command == "restore" and args.name.casefold() == journal["name"].casefold()):
         error("finish the unfinished restore first: rerun `multi-codex restore {}`".format(journal["name"]))
         return True
     # Windows 上 use 中断在“旧链接已删、新链接未建”时，~/.codex 缺失：migrate-default 会把它判为源不存在。
     # 其它写命令不涉及 ~/.codex，不拦；POSIX 不写这份记录。
-    if args.command == "migrate-default" and not args.dry_run:
+    if args.command == "migrate-default" and not dry_run:
         interrupted = switch.load_use_journal()
         if interrupted and entry_kind(expand(platform.default_source())) == KIND_MISSING:
             error("a previous `use` was interrupted and ~/.codex is missing; run `multi-codex use {}` "
@@ -783,6 +802,9 @@ def dispatch(args: argparse.Namespace) -> int:
         _apply_netcheck_changes(new, account, args)
     elif args.command == "clash-api":
         new.clash_api = _clash_api_from_args(args)
+    elif args.command == "agent-lock":
+        # 自己调用 converge 并返回：末尾的通用收敛会读 dry_run / verbose，这条命令没有这两个选项。
+        return _agent_lock_write(old, new, exists, args)
     elif args.command == "rename":
         prepared = _rename_config(new, args)
         if isinstance(prepared, int):
@@ -1131,16 +1153,21 @@ def _load_apply_file(path: str, old: Config) -> Config:
             raw = handle.read()
     except OSError as exc:
         raise ConfigError("cannot read {}: {}".format(path, exc))
-    # Clash 接口地址与 secret 是本机状态（各机器的 Clash 配置不同）：先从原始 JSON 里拿掉再校验，
-    # 否则文件里另一个平台的地址（如在 macOS 上写了 \\.\pipe\…）会让整个 apply 校验失败。
+    # Clash 接口地址与 secret、agent_lock 都是本机状态（各机器的路径不同）：先从原始 JSON 里拿掉再校验，
+    # 否则文件里另一个平台的地址（如在 macOS 上写了 \\.\pipe\…）或非法的 agent_lock 会让整个 apply 校验失败。
     clash_written = False
+    agent_lock_written = False
     try:
         document = json.loads(raw)
     except ValueError:
         document = None  # 不是合法 JSON，交给 parse_config 给出统一的报错
-    if isinstance(document, dict) and "clash_api" in document:
-        clash_written = True
-        del document["clash_api"]
+    if isinstance(document, dict) and ("clash_api" in document or "agent_lock" in document):
+        if "clash_api" in document:
+            clash_written = True
+            del document["clash_api"]
+        if "agent_lock" in document:
+            agent_lock_written = True
+            del document["agent_lock"]
         raw = json.dumps(document)
     new = parse_config(raw, path)
     # parse_config 会给省略的 dir 填默认值，要判断文件里是否显式写了，只能看原始 JSON。
@@ -1158,11 +1185,15 @@ def _load_apply_file(path: str, old: Config) -> Config:
             account.dir_name = current.dir_name
     # 绑定是本机状态，沿用当前值；文件中已删除的账号，它的绑定一并删除。
     new.bindings = dict(old.bindings)
-    # Clash 接口沿用当前值（见上）。
+    # Clash 接口与启动前缀都沿用当前值（见上）。文件没写 agent_lock 时也不能把已经打开的前缀关掉。
     if clash_written:
         warn("'clash_api' in {} is ignored; it is a setting of this machine, change it with "
              "`multi-codex clash-api`".format(path))
+    if agent_lock_written:
+        warn("'agent_lock' in {} is ignored; it is a setting of this machine, change it with "
+             "`multi-codex agent-lock on|off`".format(path))
     new.clash_api = old.clash_api
+    new.agent_lock = old.agent_lock
     for name in set(new.bindings.values()):
         if new.find(name) is None:
             binding.drop_account(new, name)
@@ -1529,8 +1560,9 @@ def _account_exec_args(config: Config, account: Account, command: List[str]) -> 
     环境由 launcher.render 生成的脚本设置，与启动命令逐字一致。脚本经环境变量交给 sh，
     不放进命令行参数：里面可能有账号环境变量里的密钥，命令行参数其它用户用 ps 就能看到。
     """
+    wrapper = config.agent_lock.wrapper if config.agent_lock is not None else None
     script = launcher.render(account.name, accounts.account_dir(config, account.name), account.proxy,
-                             account.env, command_mode=True)
+                             account.env, command_mode=True, wrapper=wrapper)
     env = dict(os.environ)
     env[launcher.RUN_SCRIPT_ENV] = script
     return ["sh", "-c", 'eval "${}"'.format(launcher.RUN_SCRIPT_ENV), "sh"] + command, env
@@ -1712,6 +1744,229 @@ def cmd_clash_api_show() -> int:
     return accounts.EXIT_OK
 
 
+# 切换器里的端口注释。只比端口，不比 scheme。inherit 不要求有这一行。
+_WRAPPER_PROXY_PORT = re.compile(r"(?m)^#\s*proxy_url=http://127\.0\.0\.1:(\d+)\s*$")
+# 与 agent-lock doctor 的 unix 探测相同：连上退出 0，OSError 退出 1。只有 1 能证明套接字对 agentnet 关闭。
+_UNIX_CONNECT = (
+    "import socket, sys\n"
+    "s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)\n"
+    "s.settimeout(3)\n"
+    "try:\n"
+    "    s.connect(sys.argv[1])\n"
+    "except OSError:\n"
+    "    sys.exit(1)\n"
+    "sys.exit(0)\n"
+)
+_DEFAULT_WRAPPER = "/usr/local/sbin/agent-lock"
+
+
+def cmd_agent_lock_show() -> int:
+    """`agent-lock`：只打印开关和切换器路径，不探测网络。"""
+    config, _ = load_config()
+    if config.agent_lock is None:
+        print("enabled: no")
+        print("wrapper:")
+    else:
+        print("enabled: yes")
+        print("wrapper: {}".format(config.agent_lock.wrapper))
+    return accounts.EXIT_OK
+
+
+def _agent_lock_write(old: Config, new: Config, exists: bool, args: argparse.Namespace) -> int:
+    if args.action == "off":
+        new.agent_lock = None
+        return accounts.converge(old, new, config_exists=exists, dry_run=False)
+    return _agent_lock_on(old, new, exists, args)
+
+
+def _default_wrapper() -> str:
+    if platform.IS_WINDOWS:
+        return launcher.WINDOWS_AGENT_LOCK_CMD
+    return _DEFAULT_WRAPPER
+
+
+def _agent_lock_on(old: Config, new: Config, exists: bool, args: argparse.Namespace) -> int:
+    """前提都过了才 install，然后 converge。任一前提失败都不改启动脚本，也不改账号的网络检查或代理。"""
+    if args.wrapper:
+        wrapper = args.wrapper
+    elif new.agent_lock is not None:
+        wrapper = new.agent_lock.wrapper
+    else:
+        wrapper = _default_wrapper()
+    if not os.path.isabs(wrapper):
+        error("agent-lock wrapper must be an absolute path: {}".format(wrapper))
+        return accounts.EXIT_ERROR
+    if not (os.path.isfile(wrapper) and os.access(wrapper, os.X_OK)):
+        error("agent-lock wrapper is missing or not executable: {}".format(wrapper))
+        return accounts.EXIT_ERROR
+    if not _agentnet_account_ok():
+        return accounts.EXIT_ERROR
+    if sys.platform.startswith("linux") and any(account.env for account in new.accounts.values()):
+        parent = expand(new.bin_dir)
+        reason = launcher.linux_bind_dir_error(parent)
+        if reason:
+            error(reason)
+            return accounts.EXIT_ERROR
+    if platform.IS_WINDOWS:
+        refused = _windows_lock_refused(new)
+        if refused:
+            error(refused)
+            return accounts.EXIT_ERROR
+    else:
+        refused = _unix_controller_open(wrapper)
+        if refused:
+            error(refused)
+            return accounts.EXIT_ERROR
+    port = _wrapper_proxy_port(wrapper)
+    for account in new.accounts.values():
+        if account.proxy == PROXY_OFF:
+            error("proxy is off for account {!r}; set it to inherit or the wrapper port before "
+                  "`multi-codex agent-lock on`".format(account.name))
+            return accounts.EXIT_ERROR
+        if account.proxy != PROXY_INHERIT:
+            account_port = _proxy_port(account.proxy)
+            if port is None or account_port != port:
+                error("proxy port of account {!r} does not match # proxy_url in {}".format(
+                    account.name, wrapper))
+                return accounts.EXIT_ERROR
+    if not _install_trust():
+        return accounts.EXIT_ERROR
+    new.agent_lock = AgentLock(wrapper)
+    return accounts.converge(old, new, config_exists=exists, dry_run=False)
+
+
+def _agentnet_account_ok() -> bool:
+    if platform.IS_WINDOWS:
+        return _windows_agentnet_enabled()
+    try:
+        result = subprocess.run(["id", "agentnet"], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                universal_newlines=True, timeout=20)
+    except (OSError, subprocess.SubprocessError):
+        error("cannot run id agentnet")
+        return False
+    if result.returncode != 0:
+        error("user agentnet does not exist; create it with agent-lock install")
+        return False
+    return True
+
+
+def _windows_agentnet_enabled() -> bool:
+    script = ("$u = Get-LocalUser -Name 'agentnet' -ErrorAction SilentlyContinue; "
+              "if ($null -eq $u -or -not $u.Enabled) { exit 1 }; exit 0")
+    try:
+        result = subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                universal_newlines=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        error("cannot query the agentnet account")
+        return False
+    if result.returncode != 0:
+        error("Windows account agentnet does not exist or is not Enabled")
+        return False
+    return True
+
+
+def _windows_lock_refused(config: Config) -> Optional[str]:
+    """只在 Windows 上拒绝 strict 和 Clash 检查。不改那些账号的设置。"""
+    for account in config.accounts.values():
+        if account.net_check.level == "strict":
+            return ("account {!r} uses a strict network check; turn it off before "
+                    "`multi-codex agent-lock on`".format(account.name))
+        if account.net_check.clash:
+            return ("account {!r} has a Clash check on; turn it off before "
+                    "`multi-codex agent-lock on`".format(account.name))
+    return None
+
+
+def _agent_lock_state_path() -> str:
+    """agent-lock 的 state.json。XDG_CONFIG_HOME 是绝对路径时用它，否则用 ~/.config。"""
+    xdg = os.environ.get("XDG_CONFIG_HOME") or ""
+    base = xdg if os.path.isabs(xdg) else os.path.join(os.path.expanduser("~"), ".config")
+    return os.path.join(base, "agent-lock", "state.json")
+
+
+def _unix_socket_paths() -> Optional[List[str]]:
+    """要探测的套接字。state.json 不存在视为没有套接字；存在但读不出合法对象则失败（拒绝）。"""
+    path = _agent_lock_state_path()
+    if not os.path.exists(path):
+        return []
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            state = json.load(handle)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(state, dict):
+        return None
+    paths = []
+    controller = state.get("controller") or ""
+    if str(controller).startswith("unix:"):
+        paths.append(controller[len("unix:"):])
+    home = state.get("owner_home") or ""
+    if home:
+        paths.append(os.path.join(home, ".local", "share", "mihomo-cli", "mihomo.sock"))
+    return [item for item in paths if item and os.path.exists(item)]
+
+
+def _unix_controller_open(wrapper: str) -> Optional[str]:
+    """agentnet 能连上 unix 控制器，或没法证明套接字已关闭时，返回拒绝原因。没有套接字则允许。
+
+    经切换器运行连接片段。返回码 1 才是关闭；0、其它码、超时都拒绝。不 chmod 套接字。
+    """
+    sockets = _unix_socket_paths()
+    if sockets is None:
+        return "cannot read agent-lock state; refusing while a unix controller may be open"
+    if not sockets:
+        return None
+    python = sys.executable or "python3"
+    for sock in sockets:
+        try:
+            result = subprocess.run([wrapper, python, "-c", _UNIX_CONNECT, sock],
+                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                    universal_newlines=True, timeout=20)
+        except (OSError, subprocess.SubprocessError):
+            return "cannot prove unix controller {} is closed to agentnet".format(sock)
+        if result.returncode != 1:
+            return "agentnet can reach unix controller {} (or the probe did not prove it closed)".format(sock)
+    return None
+
+
+def _wrapper_proxy_port(wrapper: str) -> Optional[int]:
+    try:
+        with open(wrapper, "r", encoding="utf-8", errors="replace") as handle:
+            text = handle.read()
+    except OSError:
+        return None
+    match = _WRAPPER_PROXY_PORT.search(text)
+    if match is None:
+        return None
+    return int(match.group(1))
+
+
+def _proxy_port(proxy: str) -> Optional[int]:
+    try:
+        return urllib.parse.urlsplit(proxy).port
+    except ValueError:
+        return None
+
+
+def _install_trust() -> bool:
+    """管理命令 agent-lock（PATH 上的那个）信任本解释器与入口脚本。成功时不转发它的输出。"""
+    argv = ["agent-lock", "install", "--trust-exec", sys.executable, "--trust-exec", launcher.entry_script()]
+    try:
+        result = subprocess.run(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                universal_newlines=True, timeout=120)
+    except FileNotFoundError:
+        error("agent-lock is not on PATH; install it before `multi-codex agent-lock on`")
+        return False
+    except (OSError, subprocess.SubprocessError) as exc:
+        error("agent-lock install failed: {}".format(exc))
+        return False
+    if result.returncode != 0:
+        error("agent-lock install exited {}".format(result.returncode))
+        return False
+    return True
+
+
 def _apply_netcheck_changes(config: Config, account: Account, args: argparse.Namespace) -> None:
     """按 netcheck 的写形态修改账号设置；按改完后的结果校验，不合法时抛 UsageError（退出 2）。"""
     check = account.net_check
@@ -1839,8 +2094,31 @@ def _clash_api_from_args(args: argparse.Namespace) -> Optional[ClashApi]:
     return ClashApi(address, secret)
 
 
+def _windows_is_agentnet() -> bool:
+    """当前进程是不是 agentnet。只看用户名：Windows 上打开前缀后必须已经是这个账户。"""
+    for key in ("USERNAME", "USER"):
+        value = os.environ.get(key)
+        if value and value.casefold() == "agentnet":
+            return True
+    return False
+
+
+def _refuse_windows_agent_lock(config: Config) -> Optional[int]:
+    """打开前缀且当前用户不是 agentnet 时返回 126。POSIX 与关闭时返回 None，不改变原有路径。"""
+    if not platform.IS_WINDOWS or config.agent_lock is None or _windows_is_agentnet():
+        return None
+    sys.stderr.write("multi-codex: current user is not agentnet. Open a window with: runas /user:agentnet cmd\n")
+    return 126
+
+
 def _run_account_windows(config: Config, account: Account, command: List[str]) -> int:
-    """Windows 上以账号环境运行 command；环境由 launcher.account_env 构造，与 sh 版启动命令语义一致。"""
+    """Windows 上以账号环境运行 command；环境由 launcher.account_env 构造，与 sh 版启动命令语义一致。
+
+    命名的 .cmd 已经调用过 agent-lock.cmd，这里只拒绝非 agentnet，不再套一层。
+    """
+    refused = _refuse_windows_agent_lock(config)
+    if refused is not None:
+        return refused
     directory = accounts.account_dir(config, account.name)
     if not os.path.isdir(directory):
         sys.stderr.write("multi-codex: account directory does not exist: {}\n".format(directory))
@@ -1868,9 +2146,16 @@ def cmd_launch(argv: List[str]) -> int:
         here = binding.normalize_dir(os.getcwd())
         found = binding.resolve(config, here) if exists else None
         if found is None:
+            # 拒绝时不打印 “running codex”：那一行表示马上以当前用户启动。
+            refused = _refuse_windows_agent_lock(config)
+            if refused is not None:
+                return refused
             sys.stderr.write("multi-codex: no account is bound to {} or its parents; running codex "
                              "(the default account)\n".format(here))
-            return _call_windows(dict(os.environ), ["codex"] + args)
+            command = ["codex"] + args
+            if platform.IS_WINDOWS and config.agent_lock is not None:
+                command = [launcher.WINDOWS_AGENT_LOCK_CMD] + command
+            return _call_windows(dict(os.environ), command)
         bound_dir, name = found
         if config.find(name) is None:
             sys.stderr.write("multi-codex: account {} bound to {} is not registered; run: multi-codex unbind "

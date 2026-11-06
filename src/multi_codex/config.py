@@ -108,7 +108,8 @@ class Account(object):
 class Config(object):
     def __init__(self, root: str, bin_dir: str, shared_dir: Optional[str],
                  shared_items: List[str], accounts: Dict[str, Account],
-                 bindings: Optional[Dict[str, str]] = None, clash_api: Optional["ClashApi"] = None) -> None:
+                 bindings: Optional[Dict[str, str]] = None, clash_api: Optional["ClashApi"] = None,
+                 agent_lock: Optional["AgentLock"] = None) -> None:
         self.root = root
         self.bin_dir = bin_dir
         self.shared_dir = shared_dir
@@ -120,6 +121,8 @@ class Config(object):
         # Clash / mihomo 外部控制接口，整台机器一个（feature-network-check §5.1.1）。属于本机状态，
         # apply -f 时沿用当前值；None 表示未设置。
         self.clash_api = clash_api
+        # 启动前缀。None 表示关，配置里不写这个键；打开时只有 enabled 与切换器路径。
+        self.agent_lock = agent_lock
 
     def find(self, name: str) -> Optional[Account]:
         """按大小写不敏感匹配查找账号。
@@ -155,7 +158,7 @@ class Config(object):
     def copy(self) -> "Config":
         return Config(self.root, self.bin_dir, self.shared_dir, self.shared_items,
                       {key: value.copy() for key, value in self.accounts.items()}, dict(self.bindings),
-                      self.clash_api)
+                      self.clash_api, self.agent_lock.copy() if self.agent_lock is not None else None)
 
     def to_dict(self) -> dict:
         data = {
@@ -171,6 +174,9 @@ class Config(object):
         # 同理：未设置时不写，旧配置读入再写回逐字不变。
         if self.clash_api is not None:
             data["clash_api"] = self.clash_api.to_dict()
+        # 关闭时不写：旧配置读入再写回逐字不变。关掉是删掉字段，不是写 enabled: false。
+        if self.agent_lock is not None:
+            data["agent_lock"] = self.agent_lock.to_dict()
         return data
 
 
@@ -262,7 +268,8 @@ def parse_config(raw: str, source: str) -> Config:
                 or not NAME_PATTERN.match(name):
             raise ConfigError("{}: invalid binding {!r} -> {!r}".format(source, path, name))
     clash_api = _parse_clash_api(data.get("clash_api"), source)
-    return Config(root, bin_dir, shared_dir, shared_items, accounts, bindings, clash_api)
+    agent_lock = _parse_agent_lock(data.get("agent_lock"), source)
+    return Config(root, bin_dir, shared_dir, shared_items, accounts, bindings, clash_api, agent_lock)
 
 
 def _check_dir_names(accounts: Dict[str, Account], source: str) -> None:
@@ -479,6 +486,26 @@ class ClashApi(object):
         return data
 
 
+class AgentLock(object):
+    """启动前缀。只在打开时写入配置；没有这个对象就是关。
+
+    wrapper 是切换器的绝对路径，不是管理命令，也不保存端口或 secret。
+    """
+
+    def __init__(self, wrapper: str) -> None:
+        self.wrapper = wrapper
+
+    @property
+    def enabled(self) -> bool:
+        return True
+
+    def copy(self) -> "AgentLock":
+        return AgentLock(self.wrapper)
+
+    def to_dict(self) -> dict:
+        return {"enabled": True, "wrapper": self.wrapper}
+
+
 def normalize_country(value: object) -> str:
     """两位字母国家代码，存大写。"""
     if not isinstance(value, str) or not COUNTRY_PATTERN.match(value):
@@ -562,6 +589,22 @@ def _parse_net_check(value: object, where: str) -> NetCheck:
     if not isinstance(clash, bool):
         raise ConfigError("{}: 'net_check.clash' must be true or false".format(where))
     return NetCheck(level, country, clash, clash)
+
+
+def _parse_agent_lock(value: object, source: str) -> Optional[AgentLock]:
+    """缺省或 JSON null 是关。打开时只能有 enabled: true 和绝对路径 wrapper，不接受端口或 secret。"""
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise ConfigError("{}: 'agent_lock' must be an object".format(source))
+    if set(value) != {"enabled", "wrapper"}:
+        raise ConfigError("{}: 'agent_lock' only allows 'enabled' and 'wrapper'".format(source))
+    if value.get("enabled") is not True:
+        raise ConfigError("{}: 'agent_lock.enabled' must be true; delete the field to turn it off".format(source))
+    wrapper = value.get("wrapper")
+    if not isinstance(wrapper, str) or not os.path.isabs(wrapper):
+        raise ConfigError("{}: 'agent_lock.wrapper' must be an absolute path".format(source))
+    return AgentLock(wrapper)
 
 
 def _parse_clash_api(value: object, source: str) -> Optional[ClashApi]:
