@@ -27,6 +27,10 @@ LAUNCHER_PREFIX = "codex-"
 LAUNCHER_MODE = 0o755
 # 设置了账号环境变量的启动命令只允许本人读写执行：值里可能有 API key。
 PRIVATE_LAUNCHER_MODE = 0o700
+# Linux 上打开前缀且脚本带 env 时用这个模式：组 agentnet 可读可执行，组不可写。组来自目录的 setgid。
+LINUX_AGENT_LOCK_MODE = 0o750
+# Windows 启动命令在打开前缀时调用的切换器。路径固定，不读配置里的 wrapper 字符串。
+WINDOWS_AGENT_LOCK_CMD = r"C:\ProgramData\agent-lock\agent-lock.cmd"
 # `multi-codex run` 通过这个环境变量把脚本交给 sh，而不是放进命令行参数（其它用户能用 ps 看到）。
 RUN_SCRIPT_ENV = "MULTI_CODEX_RUN_SCRIPT"
 
@@ -39,16 +43,51 @@ def launcher_path(bin_dir: str, name: str) -> str:
     return os.path.join(bin_dir, LAUNCHER_PREFIX + name + suffix)
 
 
-def launcher_mode(env: Optional[Dict[str, str]]) -> int:
+def _agentnet_gid() -> Optional[int]:
+    """Linux 上组 agentnet 的 gid。其它平台或没有这个组时返回 None。grp 只在这里导入。"""
+    if not sys.platform.startswith("linux"):
+        return None
+    import grp
+    try:
+        return grp.getgrnam("agentnet").gr_gid
+    except KeyError:
+        return None
+
+
+def linux_bind_dir_error(parent: str) -> Optional[str]:
+    """父目录必须已是 setgid、组 agentnet、且组不可写。否则返回要打印的 bind-bin 命令。
+
+    stat 跟随符号链接：atomic_write 的 mkstemp 同样跟随。本函数不改目录。
+    """
+    message = "sudo agent-lock bind-bin {}".format(parent)
+    try:
+        info = os.stat(parent)
+    except OSError:
+        return message
+    gid = _agentnet_gid()
+    mode = info.st_mode
+    if gid is None or not stat.S_ISDIR(mode) or not mode & stat.S_ISGID or info.st_gid != gid \
+            or mode & stat.S_IWGRP:
+        return message
+    return None
+
+
+def launcher_mode(env: Optional[Dict[str, str]], *, agent_lock: bool = False) -> int:
+    if env and agent_lock and sys.platform.startswith("linux"):
+        return LINUX_AGENT_LOCK_MODE
     return PRIVATE_LAUNCHER_MODE if env else LAUNCHER_MODE
 
 
-def launcher_file_ok(path: str, content: str, env: Optional[Dict[str, str]]) -> bool:
+def launcher_file_ok(path: str, content: str, env: Optional[Dict[str, str]], *,
+                     agent_lock: bool = False) -> bool:
     """启动命令是否与期望一致；_plan_launcher 与 launcher_status 共用，两处判断必须相同。
 
     没有环境变量时只要求内容相同且可执行，与 0.3.0 一样不比较权限位：用户手工改成 0775，
-    或 bin_dir 所在文件系统忽略 chmod 时，不应被反复判为需要重写。
+    或 bin_dir 所在文件系统忽略 chmod 时，不应被反复判为需要重写。目录即使已经 bind-bin，
+    没有 env 的脚本也不改成必须 0750。
     有环境变量时还要求组和其他用户没有任何权限，否则密钥会被其他用户读到。
+    Linux 上打开前缀且有 env 时改为：属主是当前用户、组是 agentnet、模式恰好 0750。
+    macOS 打开时仍要求组位为 0。组不存在时判为不一致，不把组位非 0 当成放行。
     Windows 上只比较内容：Python 按只读属性合成权限位，组与其他用户位总是置上，比较权限位会让有 env 的账号
     永远被判为需要重写；.cmd 不含密钥，也不需要权限位保护。
     """
@@ -56,16 +95,42 @@ def launcher_file_ok(path: str, content: str, env: Optional[Dict[str, str]]) -> 
         return read_text(path) == content
     if read_text(path) != content or not os.access(path, os.X_OK):
         return False
-    if env:
-        try:
-            return stat.S_IMODE(os.stat(path).st_mode) & 0o077 == 0
-        except OSError:
-            return False
-    return True
+    if not env:
+        return True
+    try:
+        info = os.stat(path)
+    except OSError:
+        return False
+    mode = stat.S_IMODE(info.st_mode)
+    if agent_lock and sys.platform.startswith("linux"):
+        gid = _agentnet_gid()
+        return gid is not None and info.st_uid == os.getuid() and info.st_gid == gid and mode == 0o750
+    return mode & 0o077 == 0
+
+
+def _dir_check_lines(account_dir_quoted: str) -> List[str]:
+    # codex 遇到不存在的 CODEX_HOME 只会给出难懂的配置错误，这里提前给出明确提示。
+    # 用 printf 而不是 echo：dash 的 echo 会解释路径里的反斜杠。
+    return [
+        "account_dir=" + account_dir_quoted,
+        'if [ ! -d "$account_dir" ]; then',
+        '  printf \'multi-codex: account directory does not exist: %s\\n\' "$account_dir" >&2',
+        "  exit 1",
+        "fi",
+    ]
+
+
+def _agentnet_guard(inner: List[str]) -> List[str]:
+    """非 agentnet 才执行 inner，然后交给切换器重新进入。agentnet 分支不进这里。"""
+    lines = ['if [ "$(/usr/bin/id -un)" != "agentnet" ]; then']
+    lines.extend("  " + line for line in inner)
+    lines.append("fi")
+    return lines
 
 
 def render(name: str, account_dir: str, proxy: str, env: Optional[Dict[str, str]] = None,
-           command_mode: bool = False, *, net_check: bool = False) -> str:
+           command_mode: bool = False, *, net_check: bool = False,
+           wrapper: Optional[str] = None) -> str:
     """生成 POSIX sh 启动命令的完整内容。所有值都经 shlex.quote 转义。
 
     0.9 起在设好 CODEX_HOME 之后清除 ISOLATION_BREAKING_ENV（feature-isolation-sharing-rename §5.1.1），
@@ -76,21 +141,26 @@ def render(name: str, account_dir: str, proxy: str, env: Optional[Dict[str, str]
     net_check 为真时（账号开启了启动前网络检查，feature-network-check §5.1.3）在账号目录检查之后插入检查段；
     为假时输出与不带该参数时逐字相同（tests/data/posix-launchers-44cb4c1.json 快照）。必须按关键字传：
     快照测试按位置传 command_mode。command_mode 时不插入，`run` / `code` 在 Python 里检查。
+    wrapper 是 agent-lock 切换器的绝对路径。空值与关闭逐字相同。文件型脚本把前缀放在受管标记之后，
+    netgate 只在非 agentnet 分支。command_mode 的切换行紧跟 shebang，早于 unset MULTI_CODEX_RUN_SCRIPT。
     """
     q_dir = shlex.quote(account_dir)
+    dir_check = _dir_check_lines(q_dir)
     lines = [
         "#!/bin/sh",
         MARKER_PREFIX + name,
         "# Generated by multi-codex. Do not edit; use `multi-codex proxy` or `multi-codex apply`.",
-        "account_dir=" + q_dir,
-        # codex 遇到不存在的 CODEX_HOME 只会给出难懂的配置错误，这里提前给出明确提示。
-        'if [ ! -d "$account_dir" ]; then',
-        # 用 printf 而不是 echo：dash 的 echo 会解释路径里的反斜杠。
-        '  printf \'multi-codex: account directory does not exist: %s\\n\' "$account_dir" >&2',
-        "  exit 1",
-        "fi",
     ]
-    if net_check and not command_mode:
+    lines.extend(dir_check)
+    if wrapper and not command_mode:
+        # 标记留在第 2 行。非 agentnet 先做目录检查和（若开启）netgate，再 exec 切换器；
+        # 重新进入后不再跑 netgate。agentnet 分支沿用下面的目录检查、CODEX_HOME 与 exec codex。
+        inner = list(dir_check)
+        if net_check:
+            inner.extend(_net_check_lines(name))
+        inner.append('exec {} "$0" "$@"'.format(shlex.quote(wrapper)))
+        lines[2:2] = _agentnet_guard(inner)
+    elif net_check and not command_mode:
         lines.extend(_net_check_lines(name))
     lines += [
         'CODEX_HOME="$account_dir"',
@@ -104,8 +174,13 @@ def render(name: str, account_dir: str, proxy: str, env: Optional[Dict[str, str]
         # 键名已按 [A-Za-z_][A-Za-z0-9_]* 校验，可以直接写；值按字面引用，不经 shell 展开。
         lines.append("{}={}; export {}".format(key, shlex.quote(env[key]), key))
     if command_mode:
-        # 脚本经环境变量传入；先清掉它，被运行的命令不会继承这份含密钥的脚本。
+        # 脚本经环境变量传入。unset 必须留在切换之后：先清掉变量，重新进入时 eval 到的是空脚本。
         lines.insert(1, "unset " + RUN_SCRIPT_ENV)
+        if wrapper:
+            # 不用 "$0" "$@"：command_mode 的脚本不在 $0 里，而在 MULTI_CODEX_RUN_SCRIPT 里。
+            switch = "  exec {} /bin/sh -c 'eval \"$MULTI_CODEX_RUN_SCRIPT\"' sh \"$@\"".format(
+                shlex.quote(wrapper))
+            lines[1:1] = _agentnet_guard([switch.lstrip()])
         lines.extend(['exec "$@"', ""])
         return "\n".join(lines)
     lines.extend([
@@ -293,17 +368,21 @@ def windows_unsafe_reason(name: str) -> Optional[str]:
     return cmd_unsafe_reason([name], windows_command_paths())
 
 
-def render_windows(name: str, python: str, entry: str) -> str:
+def render_windows(name: str, python: str, entry: str, *, agent_lock: bool = False) -> str:
     """生成 Windows 的 `codex-<名称>.cmd`。
 
     必须用 `-I` 运行脚本而不是 `-m`：`-m` 会把当前目录放进模块搜索路径，用户在含 json.py 之类文件的项目里
     启动时，这些文件会顶替标准库被执行。内容只由账号名与 python / entry 路径决定，不含 CODEX_HOME、代理、
     账号环境变量（也就不含密钥）：launch 每次运行时读配置，账号设置改了不必重写 .cmd。
+    agent_lock 为真时先调用固定的 agent-lock.cmd，由它确认 SID 再执行原来的 python 行。关闭时字节不变。
     """
+    launch = '"{}" -I "{}" launch {} -- %*'.format(python, entry, name)
+    if agent_lock:
+        launch = '"{}" {}'.format(WINDOWS_AGENT_LOCK_CMD, launch)
     return "\n".join([
         "@echo off",
         WIN_MARKER_PREFIX + name,
-        '"{}" -I "{}" launch {} -- %*'.format(python, entry, name),
+        launch,
         "exit /b %ERRORLEVEL%",
         "",
     ])

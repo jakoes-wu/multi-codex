@@ -442,6 +442,10 @@ Clash Verge 的 `config.yaml`）里找控制接口，逐个用 `GET /configs` �
 - 只检查账号的代理设置。用 `multi-codex env` 另设的 `HTTPS_PROXY`、`ALL_PROXY` 会覆盖它，这时检查的端口并不是 Codex 实际使用的端口。
 - 退出码 5 也可能来自 Codex 本身，以 stderr 里有没有 `network check failed` 为准。
 
+### 经 agent-lock 启动
+
+集成默认关闭，执行 `multi-codex agent-lock on` 之后，启动命令才会先切到专用账户 `agentnet` 再运行 Codex；在此之前启动脚本的字节不变。出站防火墙不在本仓库里，而在独立工具 agent-lock：它只放行本机 HTTP 代理，其余连接由该账户的规则丢掉。关掉时用 `multi-codex agent-lock off`。
+
 ### 用 `apply` 声明式部署
 
 ```json

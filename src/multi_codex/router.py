@@ -111,7 +111,9 @@ def render(config: Config) -> str:
         '  echo "multi-codex: codex not found in PATH" >&2',
         "  exit 127",
         "fi",
-        'exec codex "$@"',
+        # 账户分支仍是 exec "$target"。只有没有任何绑定时的回落才经切换器；关闭时这行与以前逐字相同。
+        'exec codex "$@"' if config.agent_lock is None else
+        "exec {} codex \"$@\"".format(shlex.quote(config.agent_lock.wrapper)),
         "",
     ])
     return "\n".join(lines)
